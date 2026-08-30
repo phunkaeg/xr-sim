@@ -1,0 +1,20 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        arch: [x86, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset ${{ matrix.arch }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.arch }}-release
+      - name: Headless smoke test
+        run: ctest --test-dir build/${{ matrix.arch }}-vs -C RelWithDebInfo --output-on-failure
