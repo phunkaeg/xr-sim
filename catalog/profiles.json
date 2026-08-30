@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "id": "somavr",
+      "name": "SomaVR",
+      "game": "SOMA",
+      "repositoryCandidates": ["SOMAVR"],
+      "engine": "HPL3",
+      "architecture": "x64",
+      "nativeRenderer": "OpenGL",
+      "openxrBackend": "opengl",
+      "openxrBinding": "XR_KHR_opengl_enable",
+      "transport": "direct",
+      "status": "client-probe-verified",
+      "externalProbes": [
+        {
+          "pathCandidates": ["SOMAVR\\build\\Release\\somavr_xrsim_smoke.exe"],
+          "arguments": ["--frames", "90"],
+          "expectedExitCode": 0
+        }
+      ]
+    },
+    {
+      "id": "prey2017",
+      "name": "PreyVR",
+      "game": "Prey (2017)",
+      "repositoryCandidates": ["PreyVR"],
+      "engine": "CryEngine / Arkane fork",
+      "architecture": "x64",
+      "nativeRenderer": "Direct3D 11",
+      "openxrBackend": "d3d11",
+      "openxrBinding": "XR_KHR_D3D11_enable",
+      "transport": "direct",
+      "status": "client-probe-verified",
+      "externalProbes": [
+        {
+          "pathCandidates": ["PreyVR\\build\\verify\\Release\\preyvr_xr_adapter_probe.exe"],
+          "arguments": [],
+          "expectedExitCode": 0
+        }
+      ]
+    },
+    {
+      "id": "ss2ae",
+      "name": "SS2VR",
+      "game": "System Shock 2 Anniversary Edition",
+      "repositoryCandidates": ["ss2vr-work"],
+      "engine": "KEX",
+      "architecture": "x64",
+      "nativeRenderer": "Direct3D 11",
+      "openxrBackend": "d3d11",
+      "openxrBinding": "XR_KHR_D3D11_enable",
+      "transport": "direct",
+      "status": "client-probe-verified",
+      "externalProbes": [
+        {
+          "pathCandidates": ["ss2vr-work\\build\\Release\\xr_hello64.exe"],
+          "arguments": [],
+          "expectedExitCode": 0
+        }
+      ]
+    },
+    {
+      "id": "farcry2",
+      "name": "FarCry2VR",
+      "game": "Far Cry 2",
+      "repositoryCandidates": ["FarCry2-vr"],
+      "engine": "Dunia",
+      "architecture": "x86",
+      "nativeRenderer": "Direct3D 10.1",
+      "openxrBackend": "d3d11",
+      "openxrBinding": "XR_KHR_D3D11_enable",
+      "transport": "mod-owned D3D10.1 shared surface to a private D3D11 OpenXR device",
+      "status": "contract-verified",
+      "externalProbes": []
+    },
+    {
+      "id": "sims4",
+      "name": "Sims4VR",
+      "game": "The Sims 4",
+      "repositoryCandidates": ["Sims4VR"],
+      "engine": "The Sims 4 proprietary engine",
+      "architecture": "x64",
+      "nativeRenderer": "Direct3D 11",
+      "openxrBackend": "d3d11",
+      "openxrBinding": "XR_KHR_D3D11_enable",
+      "transport": "direct (planned client)",
+      "status": "contract-verified",
+      "externalProbes": []
+    },
+    {
+      "id": "dishonored",
+      "name": "DishonoredVR",
+      "game": "Dishonored",
+      "repositoryCandidates": ["DishonoredVR"],
+      "engine": "Unreal Engine 3",
+      "architecture": "x86",
+      "nativeRenderer": "Direct3D 9",
+      "openxrBackend": "d3d12",
+      "openxrBinding": "XR_KHR_D3D12_enable",
+      "transport": "mod-owned D3D9On12 bridge",
+      "status": "contract-verified",
+      "externalProbes": [
+        {
+          "pathCandidates": ["DishonoredVR\\out\\build\\win32-release\\src\\Release\\DishonoredVROpenXRProbe.exe"],
+          "arguments": [],
+          "expectedExitCode": 0,
+          "notes": "The current standalone probe creates a D3D11 session while also checking D3D12 advertisement; the catalog contract separately exercises x86/D3D12."
+        }
+      ]
+    },
+    {
+      "id": "swat4",
+      "name": "Swat4VR",
+      "game": "SWAT 4",
+      "repositoryCandidates": ["Swat4-VR"],
+      "engine": "Unreal Engine 2 / 2.5",
+      "architecture": "x86",
+      "nativeRenderer": "Direct3D 9",
+      "openxrBackend": "d3d12",
+      "openxrBinding": "XR_KHR_D3D12_enable",
+      "transport": "mod-owned D3D9On12 bridge",
+      "status": "contract-verified",
+      "externalProbes": []
+    }
+  ]
+}

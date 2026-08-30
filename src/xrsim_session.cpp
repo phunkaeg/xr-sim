@@ -496,8 +496,9 @@ static XrResult impl_CreateSwapchain(XrSession session, const XrSwapchainCreateI
     if (!session_valid(session)) return XR_ERROR_HANDLE_INVALID;
     if (!info || !out) return XR_ERROR_VALIDATION_FAILURE;
     if (g.hazards.swapchainFail) return XR_ERROR_RUNTIME_FAILURE;
-    if (info->width == 0 || info->height == 0) return XR_ERROR_VALIDATION_FAILURE;
-    if (info->faceCount != 1 || info->arraySize != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
+    if (info->width == 0 || info->height == 0 || info->arraySize == 0)
+        return XR_ERROR_VALIDATION_FAILURE;
+    if (info->faceCount != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
 
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!graphics_session_ready()) return XR_ERROR_SESSION_LOST;
@@ -513,22 +514,23 @@ static XrResult impl_CreateSwapchain(XrSession session, const XrSwapchainCreateI
     sc.gen = gen;
     sc.width = info->width;
     sc.height = info->height;
+    sc.arraySize = info->arraySize;
     sc.format = info->format;
     const XrResult result = graphics_create_swapchain(sc, info);
     if (XR_FAILED(result)) {
         graphics_destroy_swapchain(sc);
         sc = SimSwapchain{};
         sc.gen = gen;
-        XRSIM_LOG("xrsim: %s could not create a %ux%u fmt %lld swapchain (%d)",
-                  graphics_api_name(), info->width, info->height,
+        XRSIM_LOG("xrsim: %s could not create a %ux%ux%u fmt %lld swapchain (%d)",
+                  graphics_api_name(), info->width, info->height, info->arraySize,
                   static_cast<long long>(info->format), result);
         return result;
     }
 
     sc.used = true;
     *out = make_typed_handle<XrSwapchain>(HT_SWAPCHAIN, slot, gen);
-    XRSIM_LOG("xrsim: swapchain %u created %ux%u fmt %lld (%u images)", slot, sc.width, sc.height,
-              static_cast<long long>(sc.format), sc.imageCount);
+    XRSIM_LOG("xrsim: swapchain %u created %ux%ux%u fmt %lld (%u images)", slot, sc.width,
+              sc.height, sc.arraySize, static_cast<long long>(sc.format), sc.imageCount);
     return XR_SUCCESS;
 }
 

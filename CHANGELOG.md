@@ -11,3 +11,7 @@
   control scripts, state telemetry, and the D3D11 layer compositor.
 - Added direct runtime probes, renderer-matrix tooling, per-process manifests,
   packaging, CI, and integration documentation.
+- Added texture-array swapchains for D3D10, D3D11, D3D12, and Vulkan, including
+  per-slice D3D11 compositor capture and layer array-index validation.
+- Added machine-readable profiles and automated validation for SomaVR, PreyVR,
+  SS2VR, FarCry2VR, Sims4VR, DishonoredVR, and Swat4VR.

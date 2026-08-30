@@ -34,6 +34,7 @@ with [the public compatibility header](include/xrsim/xrsim_extensions.h).
 ```powershell
 .\tools\build.ps1 -Architecture all
 .\tools\test-backends.ps1 -Architecture all
+.\tools\test-catalog.ps1 -External -CatalogRoot 'D:\Dev Debug'
 .\tools\run-with-xrsim.ps1 -Architecture x64 -Executable C:\path\to\app.exe
 ```
 
@@ -43,7 +44,9 @@ state, commands, and captures live under `%LOCALAPPDATA%\xr-sim` by default.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the backend boundary,
 [docs/CONTROL.md](docs/CONTROL.md) for deterministic input and fault injection,
-and [docs/TESTING.md](docs/TESTING.md) for the verified matrix and limitations.
+[docs/TESTING.md](docs/TESTING.md) for the verified matrix and limitations, and
+[docs/CATALOG.md](docs/CATALOG.md) for SomaVR, PreyVR, SS2VR, FarCry2VR,
+Sims4VR, DishonoredVR, and Swat4VR integration profiles.
 
 ## Status
 
@@ -53,6 +56,10 @@ D3D11 backend additionally supplies the rich visual compositor inherited from
 the original BioShock VR test runtime; the other renderers currently expose
 native swapchain images, lifecycle validation, state telemetry, and layer
 metadata without renderer-independent pixel capture.
+
+The catalog profiles deliberately describe the graphics binding presented to
+OpenXR. Legacy renderer transport remains in each mod—for example, D3D9On12 for
+DishonoredVR and Swat4VR—so xr-sim stays reusable rather than game-specific.
 
 Licensed under MIT. Bundled OpenXR and Vulkan headers retain their upstream
 licenses; see [NOTICE.md](NOTICE.md).

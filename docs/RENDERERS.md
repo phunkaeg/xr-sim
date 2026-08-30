@@ -17,6 +17,11 @@ can opt into them.
 | Vulkan | `XR_KHR_vulkan_enable` | Yes | Yes | Yes | Telemetry only |
 | Vulkan 2 bootstrap | `XR_KHR_vulkan_enable2` | Yes | Yes | Yes | Telemetry only |
 
+D3D10, D3D11, D3D12, and Vulkan accept texture-array swapchains. D3D11 rich
+capture selects the submitted `imageArrayIndex`, so a two-slice stereo texture
+captures the correct eye. The private D3D9 path and the legacy Win32 OpenGL path
+currently require `arraySize == 1`; those integrations use one swapchain per eye.
+
 "Telemetry only" means poses, actions, frame timing, layer counts/types,
 swapchain state, hazards, and scripted control all work, but `xrsim-shot.ps1`
 does not produce images. The original high-fidelity compositor is retained for

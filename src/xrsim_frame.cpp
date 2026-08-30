@@ -298,6 +298,12 @@ static XrResult impl_BeginFrame(XrSession session, const XrFrameBeginInfo*) noex
 // xrEndFrame - deep copy, then composite
 // ---------------------------------------------------------------------------
 
+static XrResult validate_subimage(const XrSwapchainSubImage& sub) noexcept {
+    const SimSwapchain* sc = swapchain_get(sub.swapchain);
+    if (!sc || sub.imageArrayIndex >= sc->arraySize) return XR_ERROR_LAYER_INVALID;
+    return XR_SUCCESS;
+}
+
 static XrResult impl_EndFrame(XrSession session, const XrFrameEndInfo* info) noexcept {
     if (!session_valid(session)) return XR_ERROR_HANDLE_INVALID;
     if (!info) return XR_ERROR_VALIDATION_FAILURE;
@@ -345,9 +351,15 @@ static XrResult impl_EndFrame(XrSession session, const XrFrameEndInfo* info) noe
         if (base->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
             const auto* p = reinterpret_cast<const XrCompositionLayerProjection*>(base);
             dst.viewCount = (p->viewCount > 2) ? 2 : p->viewCount;
-            for (uint32_t v = 0; v < dst.viewCount; ++v) dst.views[v] = p->views[v];
+            for (uint32_t v = 0; v < dst.viewCount; ++v) {
+                const XrResult valid = validate_subimage(p->views[v].subImage);
+                if (XR_FAILED(valid)) return valid;
+                dst.views[v] = p->views[v];
+            }
         } else if (base->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
             const auto* q = reinterpret_cast<const XrCompositionLayerQuad*>(base);
+            const XrResult valid = validate_subimage(q->subImage);
+            if (XR_FAILED(valid)) return valid;
             dst.eyeVisibility = q->eyeVisibility;
             dst.pose = q->pose;
             dst.size = q->size;

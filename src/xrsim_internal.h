@@ -33,6 +33,7 @@ struct SimSwapchain {
     bool used = false;
     uint32_t gen = 0;
     uint32_t width = 0, height = 0;
+    uint32_t arraySize = 1;
     int64_t format = 0;
     uint32_t imageCount = 0;
     IDirect3DTexture9* d3d9Images[kMaxSwapchainImages] = {};

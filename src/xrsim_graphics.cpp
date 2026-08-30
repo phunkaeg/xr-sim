@@ -318,6 +318,7 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
     const bool depth = (info->usageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
 
     if (s.api == GraphicsApi::D3D9) {
+        if (info->arraySize != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
         const DWORD usage = depth ? D3DUSAGE_DEPTHSTENCIL : D3DUSAGE_RENDERTARGET;
         for (uint32_t i = 0; i < sc.imageCount; ++i) {
             HANDLE shared = nullptr;
@@ -343,7 +344,7 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
         d.Width = info->width;
         d.Height = info->height;
         d.MipLevels = mipCount;
-        d.ArraySize = 1;
+        d.ArraySize = info->arraySize;
         d.Format = static_cast<DXGI_FORMAT>(info->format);
         d.SampleDesc.Count = sampleCount;
         d.Usage = D3D10_USAGE_DEFAULT;
@@ -360,7 +361,7 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
         d.Width = info->width;
         d.Height = info->height;
         d.MipLevels = mipCount;
-        d.ArraySize = 1;
+        d.ArraySize = info->arraySize;
         d.Format = static_cast<DXGI_FORMAT>(info->format);
         d.SampleDesc.Count = sampleCount;
         d.Usage = D3D11_USAGE_DEFAULT;
@@ -383,7 +384,8 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
         d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         d.Width = info->width;
         d.Height = info->height;
-        d.DepthOrArraySize = 1;
+        if (info->arraySize > UINT16_MAX) return XR_ERROR_LIMIT_REACHED;
+        d.DepthOrArraySize = static_cast<UINT16>(info->arraySize);
         d.MipLevels = static_cast<UINT16>(mipCount);
         d.Format = static_cast<DXGI_FORMAT>(info->format);
         d.SampleDesc.Count = sampleCount;
@@ -398,6 +400,10 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
     }
 
     if (s.api == GraphicsApi::OpenGL) {
+        // The Win32 compatibility context intentionally uses core GL_TEXTURE_2D
+        // entry points only. Legacy OpenGL clients (including SOMA) use one
+        // swapchain per eye; array clients receive a clear capability failure.
+        if (info->arraySize != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
         GlContextGuard guard;
         if (!guard.ok()) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
         glGenTextures(sc.imageCount, sc.glImages);
@@ -428,7 +434,7 @@ XrResult graphics_create_swapchain(SimSwapchain& sc, const XrSwapchainCreateInfo
         ci.format = static_cast<VkFormat>(info->format);
         ci.extent = {info->width, info->height, 1};
         ci.mipLevels = mipCount;
-        ci.arrayLayers = 1;
+        ci.arrayLayers = info->arraySize;
         ci.samples = static_cast<VkSampleCountFlagBits>(sampleCount);
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         ci.usage = usage;

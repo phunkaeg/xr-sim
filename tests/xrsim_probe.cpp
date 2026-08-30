@@ -444,7 +444,10 @@ int main(int argc, char** argv) {
         ci.width = 64;
         ci.height = 64;
         ci.faceCount = 1;
-        ci.arraySize = 1;
+        // Exercise the stereo texture-array path used by UE-era catalog clients.
+        // D3D9 and legacy OpenGL use one swapchain per eye instead.
+        ci.arraySize = (graphics.name == "d3d10" || graphics.name == "d3d11" ||
+                        graphics.name == "d3d12" || graphics.name == "vulkan") ? 2u : 1u;
         ci.mipCount = 1;
         xr = api.get<PFN_xrCreateSwapchain>("xrCreateSwapchain")(session, &ci, &swapchain);
         if (XR_FAILED(xr)) return fail("xrCreateSwapchain", xr);

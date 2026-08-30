@@ -1,5 +1,6 @@
 /build/
 /dist/
+/graphify-out/
 /.vs/
 *.user
 *.suo

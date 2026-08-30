@@ -17,7 +17,7 @@ foreach ($arch in @("x86", "x64")) {
     Copy-Item -LiteralPath (Join-Path $repo "build\$arch-vs\bin\$Configuration\xrsim.dll") -Destination $dst -Force
     Copy-Item -LiteralPath (Join-Path $repo "build\$arch-vs\bin\$Configuration\xrsim.pdb") -Destination $dst -Force -ErrorAction SilentlyContinue
 }
-Copy-Item -LiteralPath (Join-Path $repo "include"), (Join-Path $repo "docs"), (Join-Path $repo "scenarios"), (Join-Path $repo "tools"), (Join-Path $repo "src"), (Join-Path $repo "tests"), (Join-Path $repo "runtime"), (Join-Path $repo "third_party") -Destination $out -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $repo "catalog"), (Join-Path $repo "include"), (Join-Path $repo "docs"), (Join-Path $repo "scenarios"), (Join-Path $repo "tools"), (Join-Path $repo "src"), (Join-Path $repo "tests"), (Join-Path $repo "runtime"), (Join-Path $repo "third_party") -Destination $out -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $repo "README.md"), (Join-Path $repo "LICENSE"), (Join-Path $repo "NOTICE.md"), (Join-Path $repo "CHANGELOG.md"), (Join-Path $repo "CMakeLists.txt"), (Join-Path $repo "CMakePresets.json") -Destination $out -Force
 Compress-Archive -Path "$out\*" -DestinationPath "$out.zip" -Force
 Get-Item $out, "$out.zip"

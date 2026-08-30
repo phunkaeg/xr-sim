@@ -53,8 +53,21 @@ struct VSOut {
     float2 uv  : TEXCOORD0;
 };
 
-Texture2D    srcTex : register(t0);
+#ifdef XRSIM_TEXTURE_ARRAY
+Texture2DArray srcTex : register(t0);
+#else
+Texture2D      srcTex : register(t0);
+#endif
 SamplerState srcSmp : register(s0);
+
+float4 sample_src(float2 uv) {
+#ifdef XRSIM_TEXTURE_ARRAY
+    // The SRV exposes exactly the submitted slice, starting at array layer 0.
+    return srcTex.Sample(srcSmp, float3(uv, 0.0));
+#else
+    return srcTex.Sample(srcSmp, uv);
+#endif
+}
 
 float3 rotate_by(float4 q, float3 v) {
     float3 u = q.xyz;
@@ -95,12 +108,12 @@ float4 PSProjection(VSOut i) : SV_TARGET {
         return float4(0, 0, 0, 1);                       // outside what was submitted
 
     float2 uv = lerp(rectMin.xy, rectMax.xy, lay);
-    return float4(srcTex.Sample(srcSmp, uv).rgb, 1.0);
+    return float4(sample_src(uv).rgb, 1.0);
 }
 
 float4 PSQuad(VSOut i) : SV_TARGET {
     float2 uv = lerp(rectMin.xy, rectMax.xy, i.uv);
-    return srcTex.Sample(srcSmp, uv);
+    return sample_src(uv);
 }
 )HLSL";
 
@@ -119,6 +132,8 @@ ID3D11DeviceContext* g_ctx = nullptr;
 ID3D11VertexShader* g_vs = nullptr;
 ID3D11PixelShader* g_psProj = nullptr;
 ID3D11PixelShader* g_psQuad = nullptr;
+ID3D11PixelShader* g_psProjArray = nullptr;
+ID3D11PixelShader* g_psQuadArray = nullptr;
 ID3D11Buffer* g_cb = nullptr;
 ID3D11SamplerState* g_sampler = nullptr;
 ID3D11BlendState* g_blendOff = nullptr;
@@ -382,6 +397,8 @@ void compositor_init() {
     ID3DBlob* vsb = nullptr;
     ID3DBlob* psb1 = nullptr;
     ID3DBlob* psb2 = nullptr;
+    ID3DBlob* psb3 = nullptr;
+    ID3DBlob* psb4 = nullptr;
     ID3DBlob* err = nullptr;
     const UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL1;
 
@@ -392,6 +409,8 @@ void compositor_init() {
         if (vsb) vsb->Release();
         if (psb1) psb1->Release();
         if (psb2) psb2->Release();
+        if (psb3) psb3->Release();
+        if (psb4) psb4->Release();
         if (err) err->Release();
     };
 
@@ -402,14 +421,29 @@ void compositor_init() {
         fail("PSProjection compile failed"); return;
     }
     if (FAILED(D3DCompile(kShaderSource, strlen(kShaderSource), "xrsim", nullptr, nullptr, "PSQuad",
-                          "ps_4_0", flags, 0, &psb2, &err))) { fail("PSQuad compile failed"); return; }
+                           "ps_4_0", flags, 0, &psb2, &err))) { fail("PSQuad compile failed"); return; }
+    const D3D_SHADER_MACRO arrayMacros[] = {{"XRSIM_TEXTURE_ARRAY", "1"}, {nullptr, nullptr}};
+    if (FAILED(D3DCompile(kShaderSource, strlen(kShaderSource), "xrsim", arrayMacros, nullptr,
+                          "PSProjection", "ps_4_0", flags, 0, &psb3, &err))) {
+        fail("array PSProjection compile failed"); return;
+    }
+    if (FAILED(D3DCompile(kShaderSource, strlen(kShaderSource), "xrsim", arrayMacros, nullptr,
+                          "PSQuad", "ps_4_0", flags, 0, &psb4, &err))) {
+        fail("array PSQuad compile failed"); return;
+    }
 
     device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &g_vs);
     device->CreatePixelShader(psb1->GetBufferPointer(), psb1->GetBufferSize(), nullptr, &g_psProj);
     device->CreatePixelShader(psb2->GetBufferPointer(), psb2->GetBufferSize(), nullptr, &g_psQuad);
+    device->CreatePixelShader(psb3->GetBufferPointer(), psb3->GetBufferSize(), nullptr,
+                              &g_psProjArray);
+    device->CreatePixelShader(psb4->GetBufferPointer(), psb4->GetBufferSize(), nullptr,
+                              &g_psQuadArray);
     vsb->Release();
     psb1->Release();
     psb2->Release();
+    psb3->Release();
+    psb4->Release();
     if (err) err->Release();
 
     D3D11_BUFFER_DESC bd{};
@@ -469,7 +503,8 @@ void compositor_shutdown() {
         if (g_staging[i]) { g_staging[i]->Release(); g_staging[i] = nullptr; }
     }
     auto rel = [](auto*& p) { if (p) { p->Release(); p = nullptr; } };
-    rel(g_vs); rel(g_psProj); rel(g_psQuad); rel(g_cb); rel(g_sampler);
+    rel(g_vs); rel(g_psProj); rel(g_psQuad); rel(g_psProjArray); rel(g_psQuadArray);
+    rel(g_cb); rel(g_sampler);
     rel(g_blendOff); rel(g_blendPremul); rel(g_blendAlpha); rel(g_depthOff); rel(g_raster);
     g_ready = false;
     g_rtW = g_rtH = 0;
@@ -511,6 +546,27 @@ void uv_rect(const XrSwapchainSubImage& sub, uint32_t texW, uint32_t texH, float
     mx[1] = (y + eh) / h;
 }
 
+HRESULT create_subimage_srv(ID3D11Texture2D* tex, uint32_t arrayIndex,
+                            ID3D11ShaderResourceView** out, bool& arrayView) {
+    if (!tex || !out) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC desc{};
+    tex->GetDesc(&desc);
+    if (arrayIndex >= desc.ArraySize) return E_INVALIDARG;
+    arrayView = desc.ArraySize > 1;
+    if (!arrayView) return g_device->CreateShaderResourceView(tex, nullptr, out);
+    // Multisampled array capture needs Texture2DMSArray shaders. Swapchain
+    // lifecycle remains supported, but rich capture is deliberately skipped.
+    if (desc.SampleDesc.Count != 1) return E_NOTIMPL;
+    D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = desc.Format;
+    view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+    view.Texture2DArray.MostDetailedMip = 0;
+    view.Texture2DArray.MipLevels = desc.MipLevels;
+    view.Texture2DArray.FirstArraySlice = arrayIndex;
+    view.Texture2DArray.ArraySize = 1;
+    return g_device->CreateShaderResourceView(tex, &view, out);
+}
+
 void compose_eye(int eye, const SimSubmission& sub, std::vector<LayerStat>& stats) {
     const Rig& rig = sub.snap.rig;
     Pose eyeOffset = pose_identity();
@@ -548,7 +604,9 @@ void compose_eye(int eye, const SimSubmission& sub, std::vector<LayerStat>& stat
             ID3D11Texture2D* tex = swapchain_last_d3d11_image(v.subImage.swapchain, &tw, &th);
             if (!tex) continue;
             ID3D11ShaderResourceView* srv = nullptr;
-            if (FAILED(g_device->CreateShaderResourceView(tex, nullptr, &srv))) continue;
+            bool arrayView = false;
+            if (FAILED(create_subimage_srv(tex, v.subImage.imageArrayIndex, &srv, arrayView)))
+                continue;
 
             Constants c{};
             tangents(eyeFov, c.eyeTan);
@@ -565,7 +623,7 @@ void compose_eye(int eye, const SimSubmission& sub, std::vector<LayerStat>& stat
             set_constants(c);
 
             g_ctx->OMSetBlendState(g_blendOff, bf, 0xFFFFFFFF);
-            g_ctx->PSSetShader(g_psProj, nullptr, 0);
+            g_ctx->PSSetShader(arrayView ? g_psProjArray : g_psProj, nullptr, 0);
             g_ctx->PSSetShaderResources(0, 1, &srv);
             g_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             g_ctx->Draw(3, 0);
@@ -582,7 +640,8 @@ void compose_eye(int eye, const SimSubmission& sub, std::vector<LayerStat>& stat
         ID3D11Texture2D* tex = swapchain_last_d3d11_image(L.sub.swapchain, &tw, &th);
         if (!tex) continue;
         ID3D11ShaderResourceView* srv = nullptr;
-        if (FAILED(g_device->CreateShaderResourceView(tex, nullptr, &srv))) continue;
+        bool arrayView = false;
+        if (FAILED(create_subimage_srv(tex, L.sub.imageArrayIndex, &srv, arrayView))) continue;
 
         SimSpace* space = space_get(L.space);
         Pose base = pose_identity();
@@ -620,7 +679,7 @@ void compose_eye(int eye, const SimSubmission& sub, std::vector<LayerStat>& stat
                                                                               : g_blendPremul;
         }
         g_ctx->OMSetBlendState(blend, bf, 0xFFFFFFFF);
-        g_ctx->PSSetShader(g_psQuad, nullptr, 0);
+        g_ctx->PSSetShader(arrayView ? g_psQuadArray : g_psQuad, nullptr, 0);
         g_ctx->PSSetShaderResources(0, 1, &srv);
         g_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         g_ctx->Draw(4, 0);
