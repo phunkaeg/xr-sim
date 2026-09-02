@@ -8,3 +8,4 @@
 *.opendb
 *.log
 *.prev.log
+/*_xrprobe.json

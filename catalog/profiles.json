@@ -86,8 +86,21 @@
       "openxrBackend": "d3d11",
       "openxrBinding": "XR_KHR_D3D11_enable",
       "transport": "direct (planned client)",
-      "status": "contract-verified",
-      "externalProbes": []
+      "status": "client-probe-verified",
+      "externalProbes": [
+        {
+          "pathCandidates": ["Sims4VR\\tools\\xrprobe\\bin\\sims4vr_xrprobe.exe"],
+          "arguments": ["--selftest"],
+          "expectedExitCode": 0,
+          "notes": "Falsification matrix; touches no runtime. Feeds the per-eye geometry checks known-bad views (symmetric FOV on one eye and on both, swapped eyes, vertical offset, toe-in, 200 mm IPD) and requires each fault to flip its own check and only its own. xr-sim exposes no geometry knobs, so without this the geometry checks would run green forever and never be shown able to fail."
+        },
+        {
+          "pathCandidates": ["Sims4VR\\tools\\xrprobe\\bin\\sims4vr_xrprobe.exe"],
+          "arguments": [],
+          "expectedExitCode": 0,
+          "notes": "Live client. Negotiates with the runtime DLL directly, creates the D3D11 device on the runtime's adapter LUID, opens a 2-slice texture-array swapchain and runs 90 frames on the XR-005 contract (wait once, cache poses, submit once at end of frame). Sims4VR has no game-side OpenXR client yet, so this proves the contract the mod will present, not game readiness."
+        }
+      ]
     },
     {
       "id": "dishonored",
