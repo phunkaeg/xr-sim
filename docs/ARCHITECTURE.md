@@ -46,6 +46,9 @@ rejected without dereferencing application-controlled pointers.
 
 Control-file changes are staged on a polling thread and committed once inside
 `xrWaitFrame`, producing a coherent pose/input snapshot for the entire frame.
+`xrSyncActions` then samples that committed input into per-action state;
+`xrGetActionState*` reads the sample unchanged until the next sync and reports
+value transitions relative to the preceding active sync.
 No wait in the runtime is unbounded: frame pacing, control acknowledgement, and
 shutdown paths all have a finite escape route. This prevents an abandoned step
 test from hanging the application indefinitely.

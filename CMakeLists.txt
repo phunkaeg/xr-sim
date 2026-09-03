@@ -76,6 +76,9 @@ if(XRSIM_BUILD_TESTS)
     endif()
     add_test(NAME xrsim_headless_smoke
              COMMAND xrsim_probe "$<TARGET_FILE:xrsim>" headless)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-state/ctest")
+    set_tests_properties(xrsim_headless_smoke PROPERTIES
+        ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/ctest")
 endif()
 
 install(TARGETS xrsim RUNTIME DESTINATION bin/${XRSIM_ARCH})

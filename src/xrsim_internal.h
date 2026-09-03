@@ -70,6 +70,16 @@ struct SimAction {
     char name[XR_MAX_ACTION_NAME_SIZE] = {};
     VirtualControl control = VC_NONE;  // resolved at suggest-binding time
     int hand = -1;
+    // Input state is sampled by xrSyncActions and remains stable until the
+    // next sync. OpenXR explicitly forbids getters from observing live input
+    // changes between synchronization calls.
+    bool syncInitialized = false;
+    bool syncedActive = false;
+    bool syncedBool = false;
+    bool changedSinceLastSync = false;
+    float syncedFloat = 0.0f;
+    XrVector2f syncedVector{};
+    XrTime lastChangeTime = 0;
 };
 
 // ---------------------------------------------------------------------------

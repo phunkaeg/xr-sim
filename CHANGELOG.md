@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed `changedSinceLastSync` and `lastChangeTime` for boolean, float, and
+  vector input actions by sampling state at `xrSyncActions` instead of reading
+  live controls in `xrGetActionState*`.
+- Added menu down/up regression coverage for first-sync, pre-sync isolation,
+  repeated reads, steady-state syncs, release timing, and inactive action sets.
+
 ## 0.1.0 - 2026-08-30
 
 - Extracted the simulator from `bioshock-trilogy-vr` into a standalone runtime.

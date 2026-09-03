@@ -23,6 +23,7 @@
 #include <xrsim/xrsim_extensions.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -362,6 +363,81 @@ int fail(const char* message, XrResult result = XR_SUCCESS) {
     return 1;
 }
 
+std::wstring control_dir() {
+    wchar_t value[32768]{};
+    DWORD n = GetEnvironmentVariableW(L"XRSIM_DIR", value,
+                                      static_cast<DWORD>(sizeof(value) / sizeof(value[0])));
+    if (n > 0 && n < sizeof(value) / sizeof(value[0])) return value;
+    n = GetEnvironmentVariableW(L"LOCALAPPDATA", value,
+                                static_cast<DWORD>(sizeof(value) / sizeof(value[0])));
+    if (n == 0 || n >= sizeof(value) / sizeof(value[0])) return L"";
+    return std::wstring(value) + L"\\xr-sim";
+}
+
+bool read_command_sequence(const std::wstring& dir, uint64_t* sequence) {
+    const std::wstring path = dir + L"\\state.json";
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    char text[16384]{};
+    DWORD read = 0;
+    const BOOL ok = ReadFile(file, text, sizeof(text) - 1, &read, nullptr);
+    CloseHandle(file);
+    if (!ok) return false;
+    text[read] = '\0';
+    const char* key = std::strstr(text, "\"cmdSeq\"");
+    const char* colon = key ? std::strchr(key, ':') : nullptr;
+    if (!colon) return false;
+    *sequence = _strtoui64(colon + 1, nullptr, 10);
+    return true;
+}
+
+bool send_control_command(const char* command) {
+    const std::wstring dir = control_dir();
+    if (dir.empty()) return false;
+
+    uint64_t before = 0;
+    bool haveState = false;
+    for (int i = 0; i < 200 && !haveState; ++i) {
+        haveState = read_command_sequence(dir, &before);
+        if (!haveState) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (!haveState) return false;
+
+    const std::wstring path = dir + L"\\command.txt";
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    const std::string line = std::string(command) + "\n";
+    DWORD written = 0;
+    const BOOL wrote = WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    CloseHandle(file);
+    if (!wrote || written != line.size()) return false;
+
+    for (int i = 0; i < 300; ++i) {
+        uint64_t after = 0;
+        if (read_command_sequence(dir, &after) && after >= before + 1) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+XrResult advance_empty_frame(const Api& api, XrSession session) {
+    XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState frameState{XR_TYPE_FRAME_STATE};
+    XrResult xr = api.get<PFN_xrWaitFrame>("xrWaitFrame")(session, &waitInfo, &frameState);
+    if (XR_FAILED(xr)) return xr;
+    XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+    xr = api.get<PFN_xrBeginFrame>("xrBeginFrame")(session, &beginInfo);
+    if (XR_FAILED(xr)) return xr;
+    XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+    endInfo.displayTime = frameState.predictedDisplayTime;
+    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    return api.get<PFN_xrEndFrame>("xrEndFrame")(session, &endInfo);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -417,6 +493,46 @@ int main(int argc, char** argv) {
     XrSystemId system = XR_NULL_SYSTEM_ID;
     xr = getSystem(api.instance, &sgi, &system);
     if (XR_FAILED(xr)) return fail("xrGetSystem", xr);
+
+    const auto stringToPath = api.get<PFN_xrStringToPath>("xrStringToPath");
+    XrPath leftHand = XR_NULL_PATH;
+    XrPath menuClick = XR_NULL_PATH;
+    XrPath touchProfile = XR_NULL_PATH;
+    xr = stringToPath(api.instance, "/user/hand/left", &leftHand);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(left hand)", xr);
+    xr = stringToPath(api.instance, "/user/hand/left/input/menu/click", &menuClick);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(menu)", xr);
+    xr = stringToPath(api.instance, "/interaction_profiles/oculus/touch_controller", &touchProfile);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(touch profile)", xr);
+
+    XrActionSetCreateInfo actionSetInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(actionSetInfo.actionSetName, "xrsim_probe");
+    strcpy_s(actionSetInfo.localizedActionSetName, "xr-sim probe");
+    XrActionSet actionSet = XR_NULL_HANDLE;
+    xr = api.get<PFN_xrCreateActionSet>("xrCreateActionSet")(
+        api.instance, &actionSetInfo, &actionSet);
+    if (XR_FAILED(xr)) return fail("xrCreateActionSet", xr);
+
+    XrActionCreateInfo actionInfo{XR_TYPE_ACTION_CREATE_INFO};
+    actionInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    strcpy_s(actionInfo.actionName, "menu");
+    strcpy_s(actionInfo.localizedActionName, "Menu");
+    actionInfo.countSubactionPaths = 1;
+    actionInfo.subactionPaths = &leftHand;
+    XrAction menuAction = XR_NULL_HANDLE;
+    xr = api.get<PFN_xrCreateAction>("xrCreateAction")(actionSet, &actionInfo, &menuAction);
+    if (XR_FAILED(xr)) return fail("xrCreateAction", xr);
+
+    const XrActionSuggestedBinding menuBinding{menuAction, menuClick};
+    XrInteractionProfileSuggestedBinding suggested{
+        XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    suggested.interactionProfile = touchProfile;
+    suggested.countSuggestedBindings = 1;
+    suggested.suggestedBindings = &menuBinding;
+    xr = api.get<PFN_xrSuggestInteractionProfileBindings>(
+        "xrSuggestInteractionProfileBindings")(api.instance, &suggested);
+    if (XR_FAILED(xr)) return fail("xrSuggestInteractionProfileBindings", xr);
+
     xr = call_graphics_requirements(api, graphics, system);
     if (XR_FAILED(xr)) return fail("graphics requirements", xr);
 
@@ -427,6 +543,13 @@ int main(int argc, char** argv) {
     XrSession session = XR_NULL_HANDLE;
     xr = createSession(api.instance, &sci, &session);
     if (XR_FAILED(xr)) return fail("xrCreateSession", xr);
+
+    XrSessionActionSetsAttachInfo attachInfo{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    attachInfo.countActionSets = 1;
+    attachInfo.actionSets = &actionSet;
+    xr = api.get<PFN_xrAttachSessionActionSets>("xrAttachSessionActionSets")(
+        session, &attachInfo);
+    if (XR_FAILED(xr)) return fail("xrAttachSessionActionSets", xr);
 
     XrSwapchain swapchain = XR_NULL_HANDLE;
     if (graphics.name != "headless") {
@@ -506,12 +629,89 @@ int main(int argc, char** argv) {
         if (XR_FAILED(xr)) return fail("xrEndFrame", xr);
     }
 
+    XrActiveActionSet activeSet{actionSet, XR_NULL_PATH};
+    XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
+    syncInfo.countActiveActionSets = 1;
+    syncInfo.activeActionSets = &activeSet;
+    XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    getInfo.action = menuAction;
+    getInfo.subactionPath = leftHand;
+    const auto syncActions = api.get<PFN_xrSyncActions>("xrSyncActions");
+    const auto getBoolean = api.get<PFN_xrGetActionStateBoolean>("xrGetActionStateBoolean");
+
+    if (!send_control_command("btn menu up")) return fail("menu-up command acknowledgement");
+    xr = advance_empty_frame(api, session);
+    if (XR_FAILED(xr)) return fail("baseline action frame", xr);
+    xr = syncActions(session, &syncInfo);
+    if (XR_FAILED(xr)) return fail("baseline xrSyncActions", xr);
+    XrActionStateBoolean baseline{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &baseline);
+    if (XR_FAILED(xr)) return fail("baseline xrGetActionStateBoolean", xr);
+    if (!baseline.isActive || baseline.currentState || baseline.changedSinceLastSync)
+        return fail("baseline menu state was not active, up, and unchanged");
+
+    if (!send_control_command("btn menu down")) return fail("menu-down command acknowledgement");
+    xr = advance_empty_frame(api, session);
+    if (XR_FAILED(xr)) return fail("menu-down action frame", xr);
+    XrActionStateBoolean beforeSync{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &beforeSync);
+    if (XR_FAILED(xr)) return fail("pre-sync xrGetActionStateBoolean", xr);
+    if (beforeSync.currentState || beforeSync.changedSinceLastSync
+        || beforeSync.lastChangeTime != baseline.lastChangeTime)
+        return fail("menu state changed before xrSyncActions");
+    xr = syncActions(session, &syncInfo);
+    if (XR_FAILED(xr)) return fail("menu-down xrSyncActions", xr);
+    XrActionStateBoolean pressed{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &pressed);
+    if (XR_FAILED(xr)) return fail("menu-down xrGetActionStateBoolean", xr);
+    if (!pressed.isActive || !pressed.currentState || !pressed.changedSinceLastSync
+        || pressed.lastChangeTime == 0)
+        return fail("menu-down edge was not reported");
+
+    XrActionStateBoolean repeated{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &repeated);
+    if (XR_FAILED(xr)) return fail("repeated xrGetActionStateBoolean", xr);
+    if (!repeated.currentState || !repeated.changedSinceLastSync
+        || repeated.lastChangeTime != pressed.lastChangeTime)
+        return fail("menu edge changed between reads without xrSyncActions");
+
+    xr = syncActions(session, &syncInfo);
+    if (XR_FAILED(xr)) return fail("steady xrSyncActions", xr);
+    XrActionStateBoolean steady{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &steady);
+    if (XR_FAILED(xr)) return fail("steady xrGetActionStateBoolean", xr);
+    if (!steady.currentState || steady.changedSinceLastSync
+        || steady.lastChangeTime != pressed.lastChangeTime)
+        return fail("unchanged menu state reported another edge");
+
+    if (!send_control_command("btn menu up")) return fail("final menu-up command acknowledgement");
+    xr = advance_empty_frame(api, session);
+    if (XR_FAILED(xr)) return fail("menu-up action frame", xr);
+    xr = syncActions(session, &syncInfo);
+    if (XR_FAILED(xr)) return fail("menu-up xrSyncActions", xr);
+    XrActionStateBoolean released{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &released);
+    if (XR_FAILED(xr)) return fail("menu-up xrGetActionStateBoolean", xr);
+    if (released.currentState || !released.changedSinceLastSync
+        || released.lastChangeTime <= pressed.lastChangeTime)
+        return fail("menu-up edge was not reported");
+
+    XrActionsSyncInfo inactiveSync{XR_TYPE_ACTIONS_SYNC_INFO};
+    xr = syncActions(session, &inactiveSync);
+    if (XR_FAILED(xr)) return fail("inactive-set xrSyncActions", xr);
+    XrActionStateBoolean inactive{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xr = getBoolean(session, &getInfo, &inactive);
+    if (XR_FAILED(xr)) return fail("inactive-set xrGetActionStateBoolean", xr);
+    if (inactive.isActive || inactive.currentState || inactive.changedSinceLastSync
+        || inactive.lastChangeTime != 0)
+        return fail("inactive action did not return zero state");
+
     if (swapchain) api.get<PFN_xrDestroySwapchain>("xrDestroySwapchain")(swapchain);
     api.get<PFN_xrDestroySession>("xrDestroySession")(session);
     api.get<PFN_xrDestroyInstance>("xrDestroyInstance")(api.instance);
     api.instance = XR_NULL_HANDLE;
     FreeLibrary(api.runtime);
-    std::printf("PASS: %s (%s) exercised instance, session, swapchain, and frame lifecycle\n",
+    std::printf("PASS: %s (%s) exercised lifecycle and menu down/up action edges\n",
                 graphics.name.c_str(), sizeof(void*) == 8 ? "x64" : "x86");
     return 0;
 }

@@ -18,6 +18,10 @@ Each renderer test verifies:
 6. Native swapchain-image enumeration with the correct structure type.
 7. READY transition, session begin, and three complete frames.
 8. Acquire, finite wait, release, frame end, and teardown ordering.
+9. A command-channel menu up/down sequence across `xrSyncActions`, including
+   first-sync behavior, no pre-sync leakage, stable repeated reads, edge
+   clearing on a no-change sync, release-edge timing, and the zero-state rule
+   for inactive action sets.
 
 The headless test omits swapchain steps by design.
 
