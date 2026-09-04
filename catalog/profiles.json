@@ -120,6 +120,15 @@
           "arguments": [],
           "expectedExitCode": 0,
           "notes": "The current standalone probe creates a D3D11 session while also checking D3D12 advertisement; the catalog contract separately exercises x86/D3D12."
+        },
+        {
+          "pathCandidates": [
+            "DishonoredVR\\out\\build\\win32-release\\src\\Release\\DishonoredVRStereoSubmitProbe.exe",
+            "DishonoredVR\\out\\build\\win32-debug-x86\\src\\Debug\\DishonoredVRStereoSubmitProbe.exe"
+          ],
+          "arguments": [],
+          "expectedExitCode": 0,
+          "notes": "Creates two D3D9Ex eye surfaces, shares them with a D3D11 device on the runtime-required adapter, and submits 90 OpenXR frames. This catches DXGI alias/LUID selection regressions before submission."
         }
       ]
     },

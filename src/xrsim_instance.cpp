@@ -407,7 +407,10 @@ static XrResult impl_GetD3D11GraphicsRequirements(XrInstance instance, XrSystemI
             DXGI_ADAPTER_DESC1 desc{};
             adapter->GetDesc1(&desc);
             const bool software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
-            if (!software && desc.DedicatedVideoMemory >= best) {
+            // Keep the first adapter when DXGI exposes equal-memory aliases.
+            // D3D9 commonly exposes only that first alias, so selecting the last
+            // tie here can make otherwise valid D3D9-to-DXGI sharing impossible.
+            if (!software && (!found || desc.DedicatedVideoMemory > best)) {
                 best = desc.DedicatedVideoMemory;
                 selected = desc;
                 reqs->adapterLuid = desc.AdapterLuid;
@@ -432,12 +435,15 @@ static LUID best_adapter_luid() noexcept {
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || !factory) return result;
     IDXGIAdapter1* adapter = nullptr;
     SIZE_T best = 0;
+    bool found = false;
     for (UINT i = 0; factory->EnumAdapters1(i, &adapter) == S_OK; ++i) {
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
-        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) && desc.DedicatedVideoMemory >= best) {
+        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+            (!found || desc.DedicatedVideoMemory > best)) {
             best = desc.DedicatedVideoMemory;
             result = desc.AdapterLuid;
+            found = true;
         }
         adapter->Release();
     }

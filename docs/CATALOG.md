@@ -19,7 +19,7 @@ the runtime.
 | SS2VR | KEX | x64 | D3D11 | D3D11 | Direct | Client probe verified |
 | FarCry2VR | Dunia | x86 | D3D10.1 | D3D11 | Shared surface to a private D3D11 XR device | Contract verified |
 | Sims4VR | Proprietary | x64 | D3D11 | D3D11 | Planned direct client | Contract verified |
-| DishonoredVR | Unreal Engine 3 | x86 | D3D9 | D3D12 | D3D9On12 bridge | D3D11 client probe + x86/D3D12 contract verified |
+| DishonoredVR | Unreal Engine 3 | x86 | D3D9 | D3D12 | D3D9On12 bridge | D3D9-to-D3D11 stereo-submit probe + x86/D3D12 contract verified |
 | Swat4VR | Unreal Engine 2 / 2.5 | x86 | D3D9 | D3D12 | D3D9On12 bridge | Contract verified |
 
 The machine-readable source for this table is
@@ -46,6 +46,12 @@ The 2026-08-30 client run covered SOMA's 90-frame OpenGL loop, System Shock 2's
 Dishonored's planned D3D9On12-to-D3D12 route is covered separately by the x86
 D3D12 contract. Sims4VR does not yet contain an OpenXR client, so its entry
 establishes the target contract rather than claiming game readiness.
+
+DishonoredVR's shipping build currently submits through OpenVR. xr-sim is an
+OpenXR runtime, so it validates the mod's OpenXR probe path but cannot replace
+or observe `IVRCompositor::Submit`. OpenVR submission capture requires a
+separate OpenVR proxy or observer; loading an OpenXR API layer into that process
+does not make OpenVR calls visible to the layer.
 
 ## Run the catalog suite
 

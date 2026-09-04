@@ -7,6 +7,10 @@
   live controls in `xrGetActionState*`.
 - Added menu down/up regression coverage for first-sync, pre-sync isolation,
   repeated reads, steady-state syncs, release timing, and inactive action sets.
+- Stabilized D3D10/D3D11/D3D12 adapter selection across equal-memory DXGI
+  aliases so D3D9 interop clients receive the first hardware adapter's LUID.
+- Added runtime-versus-device LUID assertions and DishonoredVR's 90-frame
+  D3D9-to-D3D11 stereo submission probe to the regression suite.
 
 ## 0.1.0 - 2026-08-30
 

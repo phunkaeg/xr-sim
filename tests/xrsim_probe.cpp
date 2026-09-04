@@ -50,6 +50,7 @@ struct Graphics {
     const char* extension = nullptr;
     const void* binding = nullptr;
     XrStructureType imageType = XR_TYPE_UNKNOWN;
+    bool softwareAdapter = false;
     IDirect3D9* d3d9 = nullptr;
     IDirect3DDevice9* d3d9Device = nullptr;
     ID3D10Device1* d3d10 = nullptr;
@@ -146,9 +147,11 @@ bool init_d3d9(Graphics& g) {
 
 bool init_d3d10(Graphics& g) {
     if (FAILED(D3D10CreateDevice1(nullptr, D3D10_DRIVER_TYPE_HARDWARE, nullptr, 0,
-            D3D10_FEATURE_LEVEL_10_0, D3D10_1_SDK_VERSION, &g.d3d10)) &&
-        FAILED(D3D10CreateDevice1(nullptr, D3D10_DRIVER_TYPE_WARP, nullptr, 0,
-            D3D10_FEATURE_LEVEL_10_0, D3D10_1_SDK_VERSION, &g.d3d10))) return false;
+            D3D10_FEATURE_LEVEL_10_0, D3D10_1_SDK_VERSION, &g.d3d10))) {
+        g.softwareAdapter = true;
+        if (FAILED(D3D10CreateDevice1(nullptr, D3D10_DRIVER_TYPE_WARP, nullptr, 0,
+                D3D10_FEATURE_LEVEL_10_0, D3D10_1_SDK_VERSION, &g.d3d10))) return false;
+    }
     g.extension = XR_XRSIM_D3D10_ENABLE_EXTENSION_NAME;
     g.b10.device = g.d3d10;
     g.binding = &g.b10;
@@ -159,9 +162,11 @@ bool init_d3d10(Graphics& g) {
 bool init_d3d11(Graphics& g) {
     D3D_FEATURE_LEVEL level{};
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
-            D3D11_SDK_VERSION, &g.d3d11, &level, nullptr)) &&
-        FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
-            D3D11_SDK_VERSION, &g.d3d11, &level, nullptr))) return false;
+            D3D11_SDK_VERSION, &g.d3d11, &level, nullptr))) {
+        g.softwareAdapter = true;
+        if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                D3D11_SDK_VERSION, &g.d3d11, &level, nullptr))) return false;
+    }
     g.extension = XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
     g.b11.device = g.d3d11;
     g.binding = &g.b11;
@@ -178,7 +183,8 @@ bool init_d3d12(Graphics& g) {
         if (g.dxgiFactory->EnumAdapters1(i, &candidate) != S_OK) break;
         DXGI_ADAPTER_DESC1 desc{};
         candidate->GetDesc1(&desc);
-        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) && desc.DedicatedVideoMemory >= bestMemory) {
+        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+            (!adapter || desc.DedicatedVideoMemory > bestMemory)) {
             if (adapter) adapter->Release();
             adapter = candidate;
             bestMemory = desc.DedicatedVideoMemory;
@@ -186,7 +192,10 @@ bool init_d3d12(Graphics& g) {
             candidate->Release();
         }
     }
-    if (!adapter) g.dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&adapter));
+    if (!adapter) {
+        g.softwareAdapter = true;
+        g.dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&adapter));
+    }
     HRESULT hr = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g.d3d12));
     if (adapter) adapter->Release();
     if (FAILED(hr)) return false;
@@ -316,6 +325,39 @@ bool enumerate_images(const Api& api, XrSwapchain swapchain, const Graphics& g, 
     return XR_SUCCEEDED(result);
 }
 
+bool same_luid(const LUID& left, const LUID& right) {
+    return left.LowPart == right.LowPart && left.HighPart == right.HighPart;
+}
+
+bool dxgi_device_luid(IUnknown* device, LUID* luid) {
+    if (!device || !luid) return false;
+    IDXGIDevice* dxgiDevice = nullptr;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dxgiDevice)))) return false;
+    IDXGIAdapter* adapter = nullptr;
+    const HRESULT getAdapter = dxgiDevice->GetAdapter(&adapter);
+    dxgiDevice->Release();
+    if (FAILED(getAdapter) || !adapter) return false;
+    DXGI_ADAPTER_DESC desc{};
+    const HRESULT getDesc = adapter->GetDesc(&desc);
+    adapter->Release();
+    if (FAILED(getDesc)) return false;
+    *luid = desc.AdapterLuid;
+    return true;
+}
+
+XrResult validate_required_luid(const char* backend, const LUID& required,
+                                const LUID& actual) {
+    if (same_luid(required, actual)) return XR_SUCCESS;
+    std::fprintf(stderr,
+        "FAIL: %s runtime adapter LUID %08lx:%08lx does not match device %08lx:%08lx\n",
+        backend,
+        static_cast<unsigned long>(required.HighPart),
+        static_cast<unsigned long>(required.LowPart),
+        static_cast<unsigned long>(actual.HighPart),
+        static_cast<unsigned long>(actual.LowPart));
+    return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+}
+
 XrResult call_graphics_requirements(const Api& api, const Graphics& g, XrSystemId system) {
     if (g.name == "headless") return XR_SUCCESS;
     if (g.name == "d3d9") {
@@ -328,19 +370,29 @@ XrResult call_graphics_requirements(const Api& api, const Graphics& g, XrSystemI
         XrGraphicsRequirementsD3D10XRSIM r{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D10_XRSIM};
         const auto fn = api.get<PFN_xrGetD3D10GraphicsRequirementsXRSIM>(
             "xrGetD3D10GraphicsRequirementsXRSIM");
-        return fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        const XrResult result = fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        if (XR_FAILED(result) || g.softwareAdapter) return result;
+        LUID actual{};
+        if (!dxgi_device_luid(g.d3d10, &actual)) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+        return validate_required_luid("D3D10", r.adapterLuid, actual);
     }
     if (g.name == "d3d11") {
         XrGraphicsRequirementsD3D11KHR r{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D11_KHR};
         const auto fn = api.get<PFN_xrGetD3D11GraphicsRequirementsKHR>(
             "xrGetD3D11GraphicsRequirementsKHR");
-        return fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        const XrResult result = fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        if (XR_FAILED(result) || g.softwareAdapter) return result;
+        LUID actual{};
+        if (!dxgi_device_luid(g.d3d11, &actual)) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+        return validate_required_luid("D3D11", r.adapterLuid, actual);
     }
     if (g.name == "d3d12") {
         XrGraphicsRequirementsD3D12KHR r{XR_TYPE_GRAPHICS_REQUIREMENTS_D3D12_KHR};
         const auto fn = api.get<PFN_xrGetD3D12GraphicsRequirementsKHR>(
             "xrGetD3D12GraphicsRequirementsKHR");
-        return fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        const XrResult result = fn ? fn(api.instance, system, &r) : XR_ERROR_FUNCTION_UNSUPPORTED;
+        if (XR_FAILED(result) || g.softwareAdapter) return result;
+        return validate_required_luid("D3D12", r.adapterLuid, g.d3d12->GetAdapterLuid());
     }
     if (g.name == "opengl") {
         XrGraphicsRequirementsOpenGLKHR r{XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR};
