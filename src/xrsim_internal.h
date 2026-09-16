@@ -128,10 +128,15 @@ struct Globals {
     bool openGLRequirementsCalled = false;
     bool vulkanRequirementsCalled = false;
 
-    // Quest 3 native per-eye panel. Cosmetic for the mod, which sizes its
-    // swapchains from the game backbuffer and never enumerates these.
-    uint32_t recommendedWidth = 2064;
-    uint32_t recommendedHeight = 2208;
+    // Boot-frozen headset identity and optics. These are loaded before the
+    // first instance is created because clients commonly size swapchains from
+    // xrEnumerateViewConfigurationViews and never ask again.
+    uint32_t recommendedWidth[2] = {2064, 2064};
+    uint32_t recommendedHeight[2] = {2208, 2208};
+    uint32_t maxWidth[2] = {16384, 16384};
+    uint32_t maxHeight[2] = {16384, 16384};
+    Fov headsetFov[2] = {quest3_fov(0), quest3_fov(1)};
+    char headsetConfigSource[512] = "built-in";
 
     Hazards hazards{};
     Pacing pacing{PaceMode::Free, 90.0, 0, kStepStarveMsDefault, true, 0, kIdleMaxMsDefault};
@@ -234,6 +239,10 @@ void control_stop();
 void control_apply_pending();          // called inside xrWaitFrame, the commit point
 void control_write_state();
 void rig_staging_init();
+
+// Optional boot-time headset geometry. The first call freezes the result for
+// the process. A present but invalid profile is a hard initialization failure.
+bool headset_config_load_once();
 
 // Actions (xrsim_actions.cpp).
 void actions_reset_session();

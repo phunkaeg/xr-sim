@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added strict, versioned boot-time headset profiles with per-eye recommended
+  and maximum image dimensions, system identity, and asymmetric FOV.
+- Added x86/x64 regressions for default, valid, malformed, non-finite,
+  degenerate, and invalid-size headset profiles.
+- Documented the three-leg stereo acceptance topology: app-owned replay rate,
+  upstream submission identity, and downstream image-content comparison.
 - Fixed `changedSinceLastSync` and `lastChangeTime` for boolean, float, and
   vector input actions by sampling state at `xrSyncActions` instead of reading
   live controls in `xrGetActionState*`.

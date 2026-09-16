@@ -195,6 +195,15 @@ struct Rig {
     Fov   fov[2];         // per eye, radians
 };
 
+// The built-in optical profile. A boot-time headset profile can replace the
+// rig default, but the explicit `fov quest3` control command must continue to
+// mean this measured Quest 3 shape rather than "whatever profile was loaded".
+inline Fov quest3_fov(uint32_t eye) {
+    return eye == 0
+        ? Fov{deg2rad(-54.0f), deg2rad(44.0f), deg2rad(55.0f), deg2rad(-55.0f)}
+        : Fov{deg2rad(-44.0f), deg2rad(54.0f), deg2rad(55.0f), deg2rad(-55.0f)};
+}
+
 void rig_defaults(Rig& r);
 
 // A zero-extent field of view renders nothing. Callers use this to refuse a bad

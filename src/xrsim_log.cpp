@@ -5,7 +5,7 @@
 // file can be followed live, fflush on every line, one generation of history in
 // xrsim.prev.log, and an OutputDebugStringA mirror.
 
-#include "xrsim_common.h"
+#include "xrsim_internal.h"
 
 #include <shlobj.h>
 #include <cstdarg>
@@ -138,13 +138,15 @@ void rig_defaults(Rig& r) {
     r.ipdM = 0.063f;
     r.worldScale = 1.0f;
 
-    // The Quest 3 optics live HERE, not at the one call site that happens to run
-    // first. They were originally set only in rig_staging_init(), so `reset`,
-    // `fov quest3` and `hands reset` - all of which go through rig_defaults -
-    // silently zeroed the field of view and every capture came out black. A
-    // default that only one caller applies is not a default.
+    // The selected boot profile lives HERE, not at the one call site that
+    // happens to run first. These values were originally set only in
+    // rig_staging_init(), so `reset` and `hands reset` - both of which go
+    // through rig_defaults - silently zeroed the field of view and every
+    // capture came out black. A default that only one caller applies is not a
+    // default.
     //
-    // PINNED to this machine's measured VDXR values (session 37, closing the
+    // The Globals initializer is pinned to this machine's measured VDXR values
+    // (session 37, closing the
     // session-34 open item): the mod's real-headset log line reads
     // "headset fov half-angles h=54.0 v=55.0" (docs/bioshock2/ENGINE_NOTES.md,
     // Quest 3 via Virtual Desktop). The published-figures guess this replaces
@@ -153,9 +155,10 @@ void rig_defaults(Rig& r) {
     // circumscription wins, so FOV-derived sim numbers disagreed with the
     // headset. Outward asymmetry shape kept (10 deg inward reduction); the
     // MAX half-angles are what the mod consumes and they now match. With
-    // these the mod's line must read h=54.0 v=55.0.
-    r.fov[0] = Fov{deg2rad(-54.0f), deg2rad(44.0f), deg2rad(55.0f), deg2rad(-55.0f)};
-    r.fov[1] = Fov{deg2rad(-44.0f), deg2rad(54.0f), deg2rad(55.0f), deg2rad(-55.0f)};
+    // these the mod's line must read h=54.0 v=55.0. A valid boot profile
+    // replaces the values before control_start calls this function.
+    r.fov[0] = g.headsetFov[0];
+    r.fov[1] = g.headsetFov[1];
 }
 
 bool fov_is_degenerate(const Fov& f) {

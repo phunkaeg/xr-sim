@@ -20,6 +20,17 @@ header and selects the matching runtime automatically:
 .\tools\run-with-xrsim.ps1 -Executable "C:\path\to\application.exe"
 ```
 
+To reproduce a headset's startup geometry before the application chooses its
+swapchain sizes, supply a boot profile:
+
+```powershell
+.\tools\run-with-xrsim.ps1 -Executable "C:\path\to\application.exe" `
+    -HeadsetConfig .\headsets\prey-quest3-vdxr.json
+```
+
+See [HEADSET_PROFILES.md](HEADSET_PROFILES.md) for the schema, validation rules,
+and `XRSIM_HEADSET_CONFIG` / `XRSIM_DIR\headset.json` discovery order.
+
 The script restores its own environment immediately after starting the child.
 Other applications and the system's configured headset runtime are unaffected.
 

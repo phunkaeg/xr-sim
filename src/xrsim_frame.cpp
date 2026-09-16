@@ -57,7 +57,7 @@ void compose_snapshot(FrameSnapshot& snap, const Rig& rig) {
     // so, once, rather than silently rendering nothing.
     for (int e = 0; e < 2; ++e) {
         if (!fov_is_degenerate(snap.rig.fov[e])) continue;
-        XRSIM_LOG_ONCE("xrsim: eye %d had a zero-extent fov - restoring the Quest 3 default", e);
+        XRSIM_LOG_ONCE("xrsim: eye %d had a zero-extent fov - restoring the boot profile", e);
         Rig fresh;
         rig_defaults(fresh);
         snap.rig.fov[0] = fresh.fov[0];

@@ -25,6 +25,13 @@ Each renderer test verifies:
 
 The headless test omits swapchain steps by design.
 
+The profile probe runs in a fresh process for each case because boot geometry
+is intentionally immutable. In both x86 and x64 it verifies the unchanged
+built-in defaults, explicit and state-directory profile discovery, distinct
+per-eye dimensions and FOV from a valid profile,
+and hard rejection of malformed JSON, non-finite angles, inverted/degenerate
+FOV, and invalid dimensions.
+
 ## Current validated matrix
 
 On the development host, both x86 and x64 passed:
@@ -55,6 +62,40 @@ After the direct matrix passes, run an actual OpenXR application through
 
 This second stage tests the Khronos loader, manifest selection, and the
 application's renderer integration rather than only the runtime DLL.
+
+## Stereo acceptance is a three-leg measurement
+
+No single instrument proves stereo correctness. Use all three legs, and state
+where every image was captured:
+
+| Leg | Measurement | What it can prove | Structural blind spot |
+|---|---|---|---|
+| 0: application-owned rate/event counter | fresh per-eye replays or equivalent eye-production events divided by draw/frame rate | both eye-production lanes are alive and paired | pixel content and the OpenXR values ultimately submitted |
+| 1: upstream OpenXR trace (`xr-tape`) | submitted subimage identity, pose, FOV, display time, and layer contract | the application submitted distinct eye resources with coherent wire metadata | whether distinct resources contain correct or divergent pixels |
+| 2: image comparison | calibrated left/right and temporal image statistics | content divergence, stale frames, black eyes, and per-eye effects | mono when captured after a compositor places one image at two eye poses |
+
+Leg 0 comes first. Read only fresh log output from the current run, require a
+positive denominator, and set a project-owned floor such as per-eye replay rate
+being at least 80% of draw rate. xr-sim cannot manufacture this counter: it
+must be emitted at the consuming mod's actual per-eye production boundary.
+
+The image capture point is load-bearing. A post-compositor pair is not a mono
+negative control: the compositor can present one source at two eye poses and
+produce a normal-looking interocular delta. BioShock's deliberate mono control
+measured a mean delta of 54.8—inside its normal scene band—while the per-eye
+replay rate fell from 90 to 0 within five seconds. Therefore:
+
+1. Calibrate image bands on a known-good build and representative scene.
+2. Treat bands as scene-dependent evidence, never universal constants.
+3. Disable the per-eye view drive deliberately and require leg 0 or the
+   upstream submission-identity check to fail.
+4. Inject a known content fault and require the image leg to fail.
+5. Keep headset-only continuous effects in a separate headset acceptance leg;
+   a clean wire trace and ordinary captures cannot clear them by construction.
+
+A green image leg that stays green under the mono control is useful for content
+comparison, but it is not a mono guard. This is the field form of a metric that
+cannot fail the defect it was imagined to detect.
 
 ## Catalog contracts and client probes
 

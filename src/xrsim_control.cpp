@@ -496,10 +496,11 @@ void apply_line(const char* line) {
     }
     if (a.is(0, "fov")) {
         if (a.is(1, "quest3")) {
-            Rig fresh;
-            rig_defaults(fresh);
-            rig.fov[0] = fresh.fov[0];
-            rig.fov[1] = fresh.fov[1];
+            rig.fov[0] = quest3_fov(0);
+            rig.fov[1] = quest3_fov(1);
+        } else if (a.is(1, "profile")) {
+            rig.fov[0] = g.headsetFov[0];
+            rig.fov[1] = g.headsetFov[1];
         } else if (a.is(1, "eye")) {
             const int h = hand_arg(a, 2);
             if (h < 0) { set_error("fov eye needs l or r"); return; }
@@ -514,8 +515,9 @@ void apply_line(const char* line) {
             rig.fov[h] = f;
         } else {
             // Symmetric-outer shorthand: `fov 54 55` gives the mod's own
-            // half-angle log line exactly h=54.0 v=55.0. Arg fallbacks track
-            // the pinned VDXR defaults in rig_defaults (session 37).
+            // half-angle log line exactly h=54.0 v=55.0. Argument fallbacks
+            // track the built-in pinned VDXR values (session 37), not a custom
+            // boot profile; use `fov profile` to restore that profile.
             const float hh = deg2rad(a.f(1, 54.0f));
             const float hv = deg2rad(a.f(2, 55.0f));
             const float inner = deg2rad(a.f(3, 44.0f));
@@ -620,6 +622,12 @@ void write_state_json() {
     fprintf(f, "  \"runtime\": \"%s\",\n", json_escape(g.runtimeName, escName, sizeof(escName)));
     fprintf(f, "  \"graphics\": \"%s\",\n", graphics_api_name());
     fprintf(f, "  \"system\": \"%s\",\n", json_escape(g.systemName, escName, sizeof(escName)));
+    fprintf(f, "  \"headsetConfig\": \"%s\",\n",
+            json_escape(g.headsetConfigSource, escName, sizeof(escName)));
+    fprintf(f, "  \"recommendedViews\": [{\"width\": %u, \"height\": %u, \"maxWidth\": %u, \"maxHeight\": %u}, "
+               "{\"width\": %u, \"height\": %u, \"maxWidth\": %u, \"maxHeight\": %u}],\n",
+            g.recommendedWidth[0], g.recommendedHeight[0], g.maxWidth[0], g.maxHeight[0],
+            g.recommendedWidth[1], g.recommendedHeight[1], g.maxWidth[1], g.maxHeight[1]);
     fprintf(f, "  \"uptimeMs\": %llu,\n", static_cast<unsigned long long>(now_ms() - g_startMs));
     fprintf(f, "  \"frame\": %llu,\n", static_cast<unsigned long long>(snap.index));
     fprintf(f, "  \"waitFrames\": %llu,\n", static_cast<unsigned long long>(g_gate.waited.load()));

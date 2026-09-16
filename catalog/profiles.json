@@ -25,7 +25,7 @@
       "id": "prey2017",
       "name": "PreyVR",
       "game": "Prey (2017)",
-      "repositoryCandidates": ["PreyVR"],
+      "repositoryCandidates": ["PreyVR", "Other VR Mods\\prey-vr"],
       "engine": "CryEngine / Arkane fork",
       "architecture": "x64",
       "nativeRenderer": "Direct3D 11",
@@ -33,6 +33,7 @@
       "openxrBinding": "XR_KHR_D3D11_enable",
       "transport": "direct",
       "status": "client-probe-verified",
+      "notes": "The newer Other VR Mods/prey-vr repository contains a game-driven mock runtime and headless harness rather than a standalone client probe. Its boot-time MockHmd geometry is represented by xr-sim headset profiles; migrate the harness to the shared runtime before promoting that repository from source-assessed coverage.",
       "externalProbes": [
         {
           "pathCandidates": ["PreyVR\\build\\verify\\Release\\preyvr_xr_adapter_probe.exe"],

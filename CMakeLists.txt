@@ -16,6 +16,7 @@ set(XRSIM_SOURCES
     include/xrsim/xrsim_extensions.h
     src/xrsim_frame.cpp
     src/xrsim_graphics.cpp
+    src/xrsim_headset.cpp
     src/xrsim_instance.cpp
     src/xrsim_internal.h
     src/xrsim_log.cpp
@@ -79,6 +80,23 @@ if(XRSIM_BUILD_TESTS)
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-state/ctest")
     set_tests_properties(xrsim_headless_smoke PROPERTIES
         ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/ctest")
+
+    add_executable(xrsim_headset_probe tests/xrsim_headset_probe.cpp)
+    target_compile_features(xrsim_headset_probe PRIVATE cxx_std_17)
+    target_include_directories(xrsim_headset_probe PRIVATE third_party/openxr/include)
+    target_compile_definitions(xrsim_headset_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    set_target_properties(xrsim_headset_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    if(MSVC)
+        target_compile_options(xrsim_headset_probe PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    foreach(profile_case default valid fallback invalid-json invalid-fov invalid-nonfinite invalid-size invalid-missing)
+        add_test(NAME xrsim_headset_profile_${profile_case}
+                 COMMAND xrsim_headset_probe "$<TARGET_FILE:xrsim>" ${profile_case})
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-state/profile-${profile_case}")
+        set_tests_properties(xrsim_headset_profile_${profile_case} PROPERTIES
+            ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/profile-${profile_case}")
+    endforeach()
 endif()
 
 install(TARGETS xrsim RUNTIME DESTINATION bin/${XRSIM_ARCH})

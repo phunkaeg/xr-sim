@@ -14,6 +14,7 @@ The code is divided by ownership:
 | Frame model | `xrsim_frame.cpp` | Deterministic timing, snapshots, view location, frame lifecycle |
 | Input | `xrsim_actions.cpp` | Action sets, bindings, controller profiles, action states, haptics telemetry |
 | Automation | `xrsim_control.cpp` | File command channel, atomic rig updates, `state.json`, fault injection |
+| Headset bootstrap | `xrsim_headset.cpp` | Strict boot-time system identity, per-eye recommended dimensions, and asymmetric FOV |
 | D3D11 compositor | `xrsim_compositor.cpp` | Projection/quad layer composition and PNG/JSON capture |
 | Common support | `xrsim_common.h`, `xrsim_internal.h`, `xrsim_math.h`, `xrsim_log.cpp` | Handles, state, math, bounded waits, logging |
 
@@ -52,6 +53,11 @@ value transitions relative to the preceding active sync.
 No wait in the runtime is unbounded: frame pacing, control acknowledgement, and
 shutdown paths all have a finite escape route. This prevents an abandoned step
 test from hanging the application indefinitely.
+
+Headset profiles are loaded before the first instance is created and frozen for
+the process. This ordering is intentional: view recommendations are bootstrap
+inputs to client swapchain allocation, while control-file changes are coherent
+per-frame inputs after a session exists.
 
 OpenGL context access is restricted to the OpenXR functions that own graphics
 work. Vulkan swapchain allocation uses device functions loaded from the

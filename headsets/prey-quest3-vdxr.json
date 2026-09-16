@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "systemName": "Meta Quest 3 (VDXR / Prey calibration)",
+  "views": [
+    {
+      "recommendedImageRectWidth": 1824,
+      "recommendedImageRectHeight": 1968,
+      "maxImageRectWidth": 16384,
+      "maxImageRectHeight": 16384,
+      "fov": {
+        "angleLeft": -0.942477796,
+        "angleRight": 0.698131701,
+        "angleUp": 0.767944871,
+        "angleDown": -0.959931089
+      }
+    },
+    {
+      "recommendedImageRectWidth": 1824,
+      "recommendedImageRectHeight": 1968,
+      "maxImageRectWidth": 16384,
+      "maxImageRectHeight": 16384,
+      "fov": {
+        "angleLeft": -0.698131701,
+        "angleRight": 0.942477796,
+        "angleUp": 0.767944871,
+        "angleDown": -0.959931089
+      }
+    }
+  ]
+}

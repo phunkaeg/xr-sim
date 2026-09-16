@@ -150,6 +150,7 @@ static XrResult impl_CreateInstance(const XrInstanceCreateInfo* info,
     log::init();
     if (!info || !out) return XR_ERROR_VALIDATION_FAILURE;
     if (g.instanceAlive) return XR_ERROR_LIMIT_REACHED;
+    if (!headset_config_load_once()) return XR_ERROR_INITIALIZATION_FAILED;
 
     bool d3d9 = false, d3d10 = false, d3d11 = false, d3d12 = false;
     bool opengl = false, vulkan = false, vulkan2 = false, headless = false;
@@ -358,10 +359,10 @@ static XrResult impl_EnumerateViewConfigurationViews(XrInstance instance, XrSyst
     for (uint32_t i = 0; i < 2; ++i) {
         views[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
         views[i].next = nullptr;
-        views[i].recommendedImageRectWidth = g.recommendedWidth;
-        views[i].recommendedImageRectHeight = g.recommendedHeight;
-        views[i].maxImageRectWidth = 16384;
-        views[i].maxImageRectHeight = 16384;
+        views[i].recommendedImageRectWidth = g.recommendedWidth[i];
+        views[i].recommendedImageRectHeight = g.recommendedHeight[i];
+        views[i].maxImageRectWidth = g.maxWidth[i];
+        views[i].maxImageRectHeight = g.maxHeight[i];
         views[i].recommendedSwapchainSampleCount = 1;
         views[i].maxSwapchainSampleCount = 1;
     }

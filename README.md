@@ -11,7 +11,9 @@ standard `XR_MND_headless` path. Opt-in private bindings cover D3D9 and D3D10,
 for which OpenXR has no Khronos graphics-binding extension.
 
 See [docs/BUILDING.md](docs/BUILDING.md), [docs/USAGE.md](docs/USAGE.md), and
-[docs/RENDERERS.md](docs/RENDERERS.md).
+[docs/RENDERERS.md](docs/RENDERERS.md). Optional boot-time
+[headset profiles](docs/HEADSET_PROFILES.md) reproduce the recommended image
+sizes and asymmetric per-eye FOV a client sees before it allocates swapchains.
 
 ## Renderer support
 

@@ -71,6 +71,7 @@ focus throttle <ms>
 ipd <millimetres>
 worldscale <factor>
 fov quest3
+fov profile
 fov <horizontal-half-angle> <vertical-half-angle> [inner-angle]
 fov eye l|r <left> <right> <up> <down>
 recenter
@@ -89,5 +90,7 @@ hazard clear
 instanceloss
 ```
 
-`reset` restores the default Quest-shaped rig, 90 Hz free pacing, inputs,
-hazards, focus model, and capture settings. `status` adds a marker to the log.
+`reset` restores the selected boot-profile rig, 90 Hz free pacing, inputs,
+hazards, focus model, and capture settings. `fov profile` restores only the
+profile FOV; `fov quest3` explicitly selects the built-in measured Quest 3
+shape. `status` adds a marker to the log.

@@ -4,7 +4,8 @@ param(
     [string[]]$ArgumentList = @(),
     [string]$WorkingDirectory = "",
     [ValidateSet("Debug", "RelWithDebInfo", "Release")][string]$Configuration = "RelWithDebInfo",
-    [string]$StateDir = "$env:LOCALAPPDATA\xr-sim"
+    [string]$StateDir = "$env:LOCALAPPDATA\xr-sim",
+    [string]$HeadsetConfig = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,9 +25,13 @@ $arch = switch ($machine) { 0x014c { "x86" } 0x8664 { "x64" } default { throw "u
 $install = & (Join-Path $PSScriptRoot "install-runtime.ps1") -Architecture $arch -Configuration $Configuration
 $savedRuntime = $env:XR_RUNTIME_JSON
 $savedDir = $env:XRSIM_DIR
+$savedHeadsetConfig = $env:XRSIM_HEADSET_CONFIG
 try {
     $env:XR_RUNTIME_JSON = $install.Manifest
     $env:XRSIM_DIR = $StateDir
+    if ($HeadsetConfig) {
+        $env:XRSIM_HEADSET_CONFIG = (Resolve-Path -LiteralPath $HeadsetConfig).Path
+    }
     if ($ArgumentList.Count) {
         Start-Process -FilePath $exe -ArgumentList $ArgumentList -WorkingDirectory $WorkingDirectory -PassThru
     } else {
@@ -35,4 +40,5 @@ try {
 } finally {
     $env:XR_RUNTIME_JSON = $savedRuntime
     $env:XRSIM_DIR = $savedDir
+    $env:XRSIM_HEADSET_CONFIG = $savedHeadsetConfig
 }

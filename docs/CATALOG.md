@@ -47,6 +47,13 @@ Dishonored's planned D3D9On12-to-D3D12 route is covered separately by the x86
 D3D12 contract. Sims4VR does not yet contain an OpenXR client, so its entry
 establishes the target contract rather than claiming game readiness.
 
+The Prey profile recognizes both the older `PreyVR` layout that supplies the
+standalone adapter probe and `Other VR Mods\prey-vr`. The newer repository's
+game-driven harness is source-assessed, not silently counted as an external
+probe. Its useful `PreyVR_MockHmd.txt` bootstrap behavior is now available
+generically through [boot-time headset profiles](HEADSET_PROFILES.md); migrating
+that harness from its private mock runtime remains a client-repository task.
+
 DishonoredVR's shipping build currently submits through OpenVR. xr-sim is an
 OpenXR runtime, so it validates the mod's OpenXR probe path but cannot replace
 or observe `IVRCompositor::Submit`. OpenVR submission capture requires a
