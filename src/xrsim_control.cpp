@@ -17,15 +17,22 @@
 // It also discards a command.txt older than its own start time. That is the same
 // stale-file trap: a leftover `head rot 90 0 0` re-applying at boot looks
 // exactly like a camera bug.
+//
+// And it marks a write as seen only once it has read it, so a file it could not
+// open, or caught empty mid-rewrite, is retried on the next poll rather than
+// lost (see poll_once).
 
 #include "xrsim_internal.h"
 
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <fcntl.h>
+#include <io.h>
 #include <share.h>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace xrsim {
 namespace {
@@ -713,50 +720,252 @@ void write_ack() {
 // The poll thread
 // ---------------------------------------------------------------------------
 
+// A command.txt write time is consumed only once that file has been opened and
+// read and was not empty. It used to be consumed BEFORE the open, so a single
+// failed open lost the command for good: every later poll saw a write time it
+// had already marked seen. Two ways to get there (2026-10-03):
+//
+//  - A rename-over writer (Python os.replace = MoveFileExW REPLACE_EXISTING, the
+//    Sims4VR driver) renames its temp file through a handle opened with DELETE
+//    access and closes that handle a moment later. In that window
+//    GetFileAttributesExW, which no share mode blocks, already reports the new
+//    write time, while an open without FILE_SHARE_DELETE - all _wfsopen can
+//    express - fails with a sharing violation. A tight renamer/poller loop on
+//    the development host hit it on 96 and 115 of 3000 renames; 0 of 6000 with
+//    FILE_SHARE_DELETE.
+//  - An in-place writer truncates, then writes. NTFS stamps both at clock-tick
+//    resolution (15.6 ms on the development host), so the two usually share a
+//    write time, and a poll that read the empty file in between had consumed
+//    the write time the command arrived under.
+//
+// So the file is opened with FILE_SHARE_DELETE, and a failed open, a read
+// error, or a read that found nothing at all leaves the write time unconsumed:
+// the next 20 ms poll tries again. Other lockers (an exclusive opener, a
+// scanner) cost a retry instead of a command. A file holding only blank lines
+// is consumed without an acknowledgement, as it always was. A batch is read
+// whole before any of it is applied, and only if the file still carries the
+// write time it was noticed under, so a retry can never apply half a batch and
+// a rewrite that lands mid-read cannot apply one twice.
+
+enum class Retry { OpenFailed, ReadFailed, Empty, Changed };
+
+// One write time the poller has not managed to read yet. Retries happen every
+// poll. The log gets a line when an episode starts and, while opens or reads
+// keep failing, more at doubling gaps. A write time finally read closes a
+// printed episode with how long it took. A write time replaced after failures
+// always gets a line, printed or not: that is the one way a batch still goes
+// unapplied. Start and progress lines stay a second apart across episodes, so
+// a writer that keeps rewriting an unreadable or empty file cannot flood the
+// log; episodes that end before they could print are counted in the next line.
+struct RetryEpisode {
+    bool active = false;
+    bool logged = false;      // printed its start line
+    FILETIME stamp{};
+    uint32_t failures = 0;    // failed opens and read errors
+    uint32_t empties = 0;     // reads that found nothing
+    uint32_t changes = 0;     // reads that found a later write than `stamp`
+    DWORD lastError = 0;
+    uint64_t firstMs = 0;
+    uint64_t lastLineMs = 0;
+};
+RetryEpisode g_retry;
+uint64_t g_retryLineMs = 0;   // last start or progress line from any episode
+uint32_t g_unloggedEpisodes = 0;
+
+const char* win32_error_text(DWORD code, char* out, size_t cap) {
+    char text[160] = {};
+    DWORD n = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr,
+                             code, 0, text, sizeof(text), nullptr);
+    while (n > 0 && (text[n - 1] == '\r' || text[n - 1] == '\n' || text[n - 1] == ' ' ||
+                     text[n - 1] == '.'))
+        text[--n] = '\0';
+    if (n) sprintf_s(out, cap, "%lu, %s", code, text);
+    else sprintf_s(out, cap, "%lu", code);
+    return out;
+}
+
+// Close the current episode. `read` is the write time that was just read
+// successfully, or null when a new write time replaced the one being retried.
+void end_retry(const FILETIME* read) {
+    if (!g_retry.active) return;
+    char err[192] = "-";
+    if (g_retry.failures) win32_error_text(g_retry.lastError, err, sizeof(err));
+    const auto ms = static_cast<unsigned long long>(now_ms() - g_retry.firstMs);
+    if (read && CompareFileTime(read, &g_retry.stamp) == 0) {
+        if (g_retry.logged) {
+            char what[384] = "";
+            if (g_retry.failures)
+                sprintf_s(what, "%u failed open/read(s) (last error %s)", g_retry.failures, err);
+            if (g_retry.empties) {
+                const size_t used = strlen(what);
+                sprintf_s(what + used, sizeof(what) - used, "%s%u empty read(s)",
+                          used ? " and " : "", g_retry.empties);
+            }
+            if (g_retry.changes) {
+                const size_t used = strlen(what);
+                sprintf_s(what + used, sizeof(what) - used, "%s%u read(s) of a later write",
+                          used ? " and " : "", g_retry.changes);
+            }
+            XRSIM_LOG("xrsim: command.txt read after %s, %llu ms after the first attempt", what, ms);
+        } else {
+            ++g_unloggedEpisodes;
+        }
+    } else if (g_retry.failures) {
+        // Printed whether or not the episode was: the version that kept failing
+        // was replaced before it was ever applied. Not a loss when the writer
+        // re-sent the same batch; a lost batch otherwise.
+        XRSIM_LOG("xrsim: command.txt was rewritten before an earlier write could be read "
+                  "(%u failed open/read(s) over %llu ms, last error %s)",
+                  g_retry.failures, ms, err);
+    } else if (!g_retry.logged) {
+        ++g_unloggedEpisodes;
+    }
+    g_retry = RetryEpisode{};
+}
+
+void note_retry(const FILETIME& stamp, Retry why, DWORD error) {
+    const uint64_t nowMs = now_ms();
+    if (g_retry.active && CompareFileTime(&stamp, &g_retry.stamp) != 0) end_retry(nullptr);
+    if (!g_retry.active) {
+        g_retry.active = true;
+        g_retry.stamp = stamp;
+        g_retry.firstMs = nowMs;
+    }
+    switch (why) {
+    case Retry::Empty: ++g_retry.empties; break;
+    case Retry::Changed: ++g_retry.changes; break;
+    default:
+        ++g_retry.failures;
+        g_retry.lastError = error;
+        break;
+    }
+
+    if (g_retry.logged) {
+        // Only failures repeat; an empty or rewritten file is told once.
+        if (why == Retry::Empty || why == Retry::Changed) return;
+        const uint64_t gap = g_retry.lastLineMs - g_retry.firstMs;
+        if (nowMs - g_retry.lastLineMs < (gap > 1000 ? gap : 1000)) return;
+    }
+    if (g_retryLineMs && nowMs - g_retryLineMs < 1000) return;
+    g_retry.logged = true;
+    g_retry.lastLineMs = nowMs;
+    g_retryLineMs = nowMs;
+    char unlogged[64] = "";
+    if (g_unloggedEpisodes) {
+        sprintf_s(unlogged, "; %u shorter episode(s) not logged", g_unloggedEpisodes);
+        g_unloggedEpisodes = 0;
+    }
+
+    const auto ms = static_cast<unsigned long long>(nowMs - g_retry.firstMs);
+    if (why == Retry::Empty) {
+        XRSIM_LOG("xrsim: command.txt is empty - write time left unconsumed (a writer may be "
+                  "between truncate and write), re-reading every poll [empty read %u, %llu ms%s]",
+                  g_retry.empties, ms, unlogged);
+    } else if (why == Retry::Changed) {
+        XRSIM_LOG("xrsim: command.txt was written again while being read - nothing applied under "
+                  "the earlier write time, re-reading next poll [%llu ms%s]", ms, unlogged);
+    } else {
+        char err[192];
+        XRSIM_LOG("xrsim: command.txt %s failed (error %s) - write time left unconsumed, retrying "
+                  "every poll [failed attempt %u, %llu ms%s]",
+                  why == Retry::OpenFailed ? "open" : "read",
+                  win32_error_text(error, err, sizeof(err)), g_retry.failures, ms, unlogged);
+    }
+}
+
 void poll_once() {
     wchar_t path[MAX_PATH];
     path_in_dir(path, MAX_PATH, L"command.txt");
 
     WIN32_FILE_ATTRIBUTE_DATA fad{};
     if (!GetFileAttributesExW(path, GetFileExInfoStandard, &fad)) return;
-    if (CompareFileTime(&fad.ftLastWriteTime, &g_lastWrite) == 0) return;
-    g_lastWrite = fad.ftLastWriteTime;
+    const FILETIME stamp = fad.ftLastWriteTime;
+    if (CompareFileTime(&stamp, &g_lastWrite) == 0) return;
 
-    FILE* f = _wfsopen(path, L"rt", _SH_DENYNO);
-    if (!f) return;
+    HANDLE h = CreateFileW(path, GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        note_retry(stamp, Retry::OpenFailed, GetLastError());
+        return;
+    }
+    // Read through the CRT in text mode so lines split exactly as they did
+    // under _wfsopen "rt" (CRLF folding, the 511-character fgets chunks).
+    const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDONLY | _O_TEXT);
+    if (fd == -1) {
+        CloseHandle(h);
+        note_retry(stamp, Retry::OpenFailed, ERROR_TOO_MANY_OPEN_FILES);
+        return;
+    }
+    FILE* f = _fdopen(fd, "rt");
+    if (!f) {
+        _close(fd);
+        note_retry(stamp, Retry::OpenFailed, ERROR_TOO_MANY_OPEN_FILES);
+        return;
+    }
 
+    std::vector<std::string> lines;
+    bool readAnything = false;
     char line[512];
-    uint32_t applied = 0;
+    while (fgets(line, sizeof(line), f)) {
+        readAnything = true;
+        char* nl = strpbrk(line, "\r\n");
+        if (nl) *nl = '\0';
+        if (line[0] == '\0') continue;
+        lines.emplace_back(line);
+    }
+    const bool readFailed = ferror(f) != 0;
+    const DWORD readError = static_cast<DWORD>(_doserrno);
+    // The batch must be the one `stamp` names. A write that landed between the
+    // attribute query and the read - an in-place writer whose write fell a
+    // clock tick after its truncation, or a rename-over - will be read again
+    // under its own write time, so applying it under this one would apply it
+    // twice.
+    FILETIME openedStamp{};
+    const bool changed = GetFileTime(h, nullptr, nullptr, &openedStamp) &&
+                         CompareFileTime(&openedStamp, &stamp) != 0;
+    fclose(f);
+    if (readFailed) {
+        note_retry(stamp, Retry::ReadFailed, readError);
+        return;
+    }
+    if (changed) {
+        note_retry(stamp, Retry::Changed, 0);
+        return;
+    }
+    if (!readAnything) {
+        note_retry(stamp, Retry::Empty, 0);
+        return;
+    }
+
+    g_lastWrite = stamp;   // read, and not empty: only now is this write seen
+    end_retry(&stamp);
+
+    const uint32_t applied = static_cast<uint32_t>(lines.size());
     g_ackText[0] = '\0';
     {
         std::lock_guard<std::mutex> lock(g_pendingMutex);
         g.lastCmdError[0] = '\0';
-        while (fgets(line, sizeof(line), f)) {
-            char* nl = strpbrk(line, "\r\n");
-            if (nl) *nl = '\0';
-            if (line[0] == '\0') continue;
-            apply_line(line);
-            ++applied;
-            if (strlen(g_ackText) + strlen(line) + 4 < sizeof(g_ackText)) {
+        for (const std::string& l : lines) {
+            apply_line(l.c_str());
+            if (strlen(g_ackText) + l.size() + 4 < sizeof(g_ackText)) {
                 if (g_ackText[0]) strcat_s(g_ackText, " | ");
-                strcat_s(g_ackText, line);
+                strcat_s(g_ackText, l.c_str());
             }
         }
     }
-    fclose(f);
+    if (!applied) return;   // blank lines only: consumed, nothing to acknowledge
 
-    if (applied) {
-        g.cmdSeq.fetch_add(applied);
-        g_ackFrame = static_cast<uint32_t>(snapshot().index);
-        write_ack();
-        // The control thread publishes state.json too, not just the frame path.
-        // Under `pace step` with no credits xrWaitFrame is BLOCKED, so a
-        // frame-path-only writer could never acknowledge the very `step` command
-        // that unblocks it - the ack channel would deadlock by construction, the
-        // same trap the dedicated poll thread exists to avoid.
-        write_state_json();
-        XRSIM_LOG("xrsim: applied %u command(s): %s", applied, g_ackText);
-    }
+    g.cmdSeq.fetch_add(applied);
+    g_ackFrame = static_cast<uint32_t>(snapshot().index);
+    write_ack();
+    // The control thread publishes state.json too, not just the frame path.
+    // Under `pace step` with no credits xrWaitFrame is BLOCKED, so a
+    // frame-path-only writer could never acknowledge the very `step` command
+    // that unblocks it - the ack channel would deadlock by construction, the
+    // same trap the dedicated poll thread exists to avoid.
+    write_state_json();
+    XRSIM_LOG("xrsim: applied %u command(s): %s", applied, g_ackText);
 }
 
 void thread_proc() {
@@ -769,6 +978,10 @@ void thread_proc() {
         g_lastWrite = fad.ftLastWriteTime;
         XRSIM_LOG("xrsim: ignoring a command.txt written before this run started");
     }
+    // A previous instance's retries are not this run's.
+    g_retry = RetryEpisode{};
+    g_retryLineMs = 0;
+    g_unloggedEpisodes = 0;
 
     while (g_running.load()) {
         poll_once();

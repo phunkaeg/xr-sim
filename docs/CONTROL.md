@@ -3,6 +3,19 @@
 Commands are line-oriented. A batch written in one `command.txt` update is
 committed atomically at the next `xrWaitFrame`.
 
+## Writing command.txt
+
+Write each batch with one write: either write `command.txt.tmp` and rename it
+over `command.txt`, or truncate `command.txt` and write the batch in a single
+call. The simulator notices a batch by the file's last-write time, and marks
+that time seen only after it has read at least one line. A batch it cannot open
+yet (another process holds the file) or finds empty mid-rewrite is retried on
+the next poll, and `xrsim.log` records the retry.
+
+Wait for `cmdSeq` in `state.json` to advance before writing the next batch. A
+batch that is replaced before it is read is never applied, and a rewrite within
+the same file-system clock tick (about 16 ms) can keep the old write time.
+
 ## Head and hands
 
 ```text

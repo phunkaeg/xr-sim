@@ -32,6 +32,19 @@ per-eye dimensions and FOV from a valid profile,
 and hard rejection of malformed JSON, non-finite angles, inverted/degenerate
 FOV, and invalid dimensions.
 
+The control probe also runs one case per process. In both x86 and x64 it
+verifies that a command survives the moment its write time changes while the
+runtime cannot read it: a writer holding `command.txt` exclusively for about
+100 ms, an in-place writer that truncates and pauses before writing, and a
+rename-over writer that still holds the renamed file with DELETE access, as
+`os.replace` does briefly. The first two pin the write time with
+`SetFileTime(-1)`, so it is the same during and after the hold: the state in
+which the poller used to lose the command. Each case first checks that a stale
+`command.txt` is ignored at boot, requires `xrsim.log` to show the poller met
+the hold (a logged retry, or for the rename case the command applied while the
+DELETE handle was still open), and ends with the command applied exactly once
+and acknowledged in `ack.txt`.
+
 ## Current validated matrix
 
 On the development host, both x86 and x64 passed:

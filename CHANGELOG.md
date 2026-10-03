@@ -17,6 +17,18 @@
   aliases so D3D9 interop clients receive the first hardware adapter's LUID.
 - Added runtime-versus-device LUID assertions and DishonoredVR's 90-frame
   D3D9-to-D3D11 stereo submission probe to the regression suite.
+- Fixed control commands that were silently lost: `command.txt`'s write time
+  was marked seen before the file was opened, so one failed open, or one read
+  of a file caught empty mid-rewrite, dropped the command for good. The time is
+  now consumed only after a successful read of a non-empty file, and failed
+  opens, read errors, and empty reads are retried on the next poll and logged
+  with rate limits. The file is also opened with `FILE_SHARE_DELETE`, so a
+  rename-over writer's own DELETE handle no longer blocks the read, and a batch
+  is applied only if the file still carries the write time it was noticed
+  under, so a rewrite that lands mid-read is not applied twice.
+- Added x86/x64 control-channel regressions for an exclusive hold, an in-place
+  truncate-then-write, and a rename-over writer still holding DELETE access,
+  each with stale-file suppression and exactly-once application checks.
 
 ## 0.1.0 - 2026-08-30
 

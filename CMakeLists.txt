@@ -97,6 +97,23 @@ if(XRSIM_BUILD_TESTS)
         set_tests_properties(xrsim_headset_profile_${profile_case} PROPERTIES
             ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/profile-${profile_case}")
     endforeach()
+
+    add_executable(xrsim_control_probe tests/xrsim_control_probe.cpp)
+    target_compile_features(xrsim_control_probe PRIVATE cxx_std_17)
+    target_include_directories(xrsim_control_probe PRIVATE third_party/openxr/include)
+    target_compile_definitions(xrsim_control_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    set_target_properties(xrsim_control_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    if(MSVC)
+        target_compile_options(xrsim_control_probe PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    foreach(control_case exclusive-hold truncate-write rename-hold)
+        add_test(NAME xrsim_control_${control_case}
+                 COMMAND xrsim_control_probe "$<TARGET_FILE:xrsim>" ${control_case})
+        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/test-state/control-${control_case}")
+        set_tests_properties(xrsim_control_${control_case} PROPERTIES
+            ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/control-${control_case}")
+    endforeach()
 endif()
 
 install(TARGETS xrsim RUNTIME DESTINATION bin/${XRSIM_ARCH})
