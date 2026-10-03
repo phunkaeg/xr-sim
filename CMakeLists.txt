@@ -114,6 +114,21 @@ if(XRSIM_BUILD_TESTS)
         set_tests_properties(xrsim_control_${control_case} PROPERTIES
             ENVIRONMENT "XRSIM_DIR=${CMAKE_BINARY_DIR}/test-state/control-${control_case}")
     endforeach()
+
+    # Executes the compositor's own quad-pass shader bytes on WARP. Needs no runtime,
+    # session or GPU; exit 77 is a missing-WARP skip.
+    add_executable(xrsim_compositor_probe tests/xrsim_compositor_probe.cpp)
+    target_compile_features(xrsim_compositor_probe PRIVATE cxx_std_17)
+    target_include_directories(xrsim_compositor_probe PRIVATE src third_party/openxr/include)
+    target_compile_definitions(xrsim_compositor_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(xrsim_compositor_probe PRIVATE d3d11 d3dcompiler)
+    set_target_properties(xrsim_compositor_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    if(MSVC)
+        target_compile_options(xrsim_compositor_probe PRIVATE /W4 /permissive- /utf-8)
+    endif()
+    add_test(NAME xrsim_compositor_quad_mvp COMMAND xrsim_compositor_probe)
+    set_tests_properties(xrsim_compositor_quad_mvp PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 install(TARGETS xrsim RUNTIME DESTINATION bin/${XRSIM_ARCH})
