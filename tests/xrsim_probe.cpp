@@ -23,6 +23,7 @@
 #include <xrsim/xrsim_extensions.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -548,12 +549,24 @@ int main(int argc, char** argv) {
 
     const auto stringToPath = api.get<PFN_xrStringToPath>("xrStringToPath");
     XrPath leftHand = XR_NULL_PATH;
+    XrPath rightHand = XR_NULL_PATH;
+    XrPath userHead = XR_NULL_PATH;
     XrPath menuClick = XR_NULL_PATH;
+    XrPath squeezeLeft = XR_NULL_PATH;
+    XrPath squeezeRight = XR_NULL_PATH;
     XrPath touchProfile = XR_NULL_PATH;
     xr = stringToPath(api.instance, "/user/hand/left", &leftHand);
     if (XR_FAILED(xr)) return fail("xrStringToPath(left hand)", xr);
+    xr = stringToPath(api.instance, "/user/hand/right", &rightHand);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(right hand)", xr);
+    xr = stringToPath(api.instance, "/user/head", &userHead);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(head)", xr);
     xr = stringToPath(api.instance, "/user/hand/left/input/menu/click", &menuClick);
     if (XR_FAILED(xr)) return fail("xrStringToPath(menu)", xr);
+    xr = stringToPath(api.instance, "/user/hand/left/input/squeeze/value", &squeezeLeft);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(left squeeze)", xr);
+    xr = stringToPath(api.instance, "/user/hand/right/input/squeeze/value", &squeezeRight);
+    if (XR_FAILED(xr)) return fail("xrStringToPath(right squeeze)", xr);
     xr = stringToPath(api.instance, "/interaction_profiles/oculus/touch_controller", &touchProfile);
     if (XR_FAILED(xr)) return fail("xrStringToPath(touch profile)", xr);
 
@@ -575,12 +588,29 @@ int main(int argc, char** argv) {
     xr = api.get<PFN_xrCreateAction>("xrCreateAction")(actionSet, &actionInfo, &menuAction);
     if (XR_FAILED(xr)) return fail("xrCreateAction", xr);
 
-    const XrActionSuggestedBinding menuBinding{menuAction, menuClick};
+    // One float action bound to BOTH hands, the shape every two-handed grip uses.
+    const XrPath bothHands[2] = {leftHand, rightHand};
+    XrActionCreateInfo squeezeInfo{XR_TYPE_ACTION_CREATE_INFO};
+    squeezeInfo.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    strcpy_s(squeezeInfo.actionName, "squeeze");
+    strcpy_s(squeezeInfo.localizedActionName, "Squeeze");
+    squeezeInfo.countSubactionPaths = 2;
+    squeezeInfo.subactionPaths = bothHands;
+    XrAction squeezeAction = XR_NULL_HANDLE;
+    xr = api.get<PFN_xrCreateAction>("xrCreateAction")(actionSet, &squeezeInfo, &squeezeAction);
+    if (XR_FAILED(xr)) return fail("xrCreateAction(squeeze)", xr);
+
+    // All of a profile's bindings in one call, as a real application suggests them.
+    const XrActionSuggestedBinding bindings[3] = {
+        {menuAction, menuClick},
+        {squeezeAction, squeezeLeft},
+        {squeezeAction, squeezeRight},
+    };
     XrInteractionProfileSuggestedBinding suggested{
         XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     suggested.interactionProfile = touchProfile;
-    suggested.countSuggestedBindings = 1;
-    suggested.suggestedBindings = &menuBinding;
+    suggested.countSuggestedBindings = 3;
+    suggested.suggestedBindings = bindings;
     xr = api.get<PFN_xrSuggestInteractionProfileBindings>(
         "xrSuggestInteractionProfileBindings")(api.instance, &suggested);
     if (XR_FAILED(xr)) return fail("xrSuggestInteractionProfileBindings", xr);
@@ -748,6 +778,56 @@ int main(int argc, char** argv) {
         || released.lastChangeTime <= pressed.lastChangeTime)
         return fail("menu-up edge was not reported");
 
+    // Two-hand float action. Each hand must read its OWN controller, and a NULL
+    // subaction path the larger of the two (the OpenXR rule for a float bound to
+    // several sources). Before per-binding state the second suggested binding
+    // replaced the first, so the left hand silently read the RIGHT controller -
+    // and a two-handed grip test could pass on one hand.
+    const auto getFloat = api.get<PFN_xrGetActionStateFloat>("xrGetActionStateFloat");
+    const auto readSqueeze = [&](XrPath sub, XrActionStateFloat& st) {
+        XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+        gi.action = squeezeAction;
+        gi.subactionPath = sub;
+        st = XrActionStateFloat{XR_TYPE_ACTION_STATE_FLOAT};
+        return getFloat(session, &gi, &st);
+    };
+    struct SqueezeStep {
+        const char* command;
+        float left, right, any;
+    };
+    const SqueezeStep squeezeSteps[] = {
+        {"grip l 0.8\ngrip r 0", 0.8f, 0.0f, 0.8f},
+        {"grip l 0\ngrip r 0.6", 0.0f, 0.6f, 0.6f},
+        {"grip l 0.3\ngrip r 0.7", 0.3f, 0.7f, 0.7f},
+    };
+    for (const SqueezeStep& s : squeezeSteps) {
+        if (!send_control_command(s.command)) return fail("squeeze command acknowledgement");
+        xr = advance_empty_frame(api, session);
+        if (XR_FAILED(xr)) return fail("squeeze action frame", xr);
+        xr = syncActions(session, &syncInfo);
+        if (XR_FAILED(xr)) return fail("squeeze xrSyncActions", xr);
+        XrActionStateFloat l{}, r{}, any{};
+        if (XR_FAILED(readSqueeze(leftHand, l)) || XR_FAILED(readSqueeze(rightHand, r))
+            || XR_FAILED(readSqueeze(XR_NULL_PATH, any)))
+            return fail("squeeze xrGetActionStateFloat");
+        if (!l.isActive || !r.isActive || !any.isActive)
+            return fail("a bound squeeze subaction was not active");
+        if (std::fabs(l.currentState - s.left) > 1e-6f || std::fabs(r.currentState - s.right) > 1e-6f
+            || std::fabs(any.currentState - s.any) > 1e-6f) {
+            // stderr, like fail(): an early return mid-session can end the process
+            // without flushing stdout, and this line is the diagnosis.
+            std::fprintf(stderr, "  after [%s]: left=%.3f right=%.3f any=%.3f, expected %.3f %.3f %.3f\n",
+                         s.command, l.currentState, r.currentState, any.currentState, s.left,
+                         s.right, s.any);
+            return fail("two-hand squeeze read the wrong controller");
+        }
+    }
+    // A subaction path the action never declared is rejected by a real runtime.
+    XrActionStateFloat undeclared{};
+    if (readSqueeze(userHead, undeclared) != XR_ERROR_PATH_UNSUPPORTED)
+        return fail("an undeclared subaction path was not rejected");
+    if (!send_control_command("grip l 0\ngrip r 0")) return fail("squeeze reset acknowledgement");
+
     XrActionsSyncInfo inactiveSync{XR_TYPE_ACTIONS_SYNC_INFO};
     xr = syncActions(session, &inactiveSync);
     if (XR_FAILED(xr)) return fail("inactive-set xrSyncActions", xr);
@@ -757,13 +837,17 @@ int main(int argc, char** argv) {
     if (inactive.isActive || inactive.currentState || inactive.changedSinceLastSync
         || inactive.lastChangeTime != 0)
         return fail("inactive action did not return zero state");
+    XrActionStateFloat inactiveSqueeze{};
+    if (XR_FAILED(readSqueeze(leftHand, inactiveSqueeze)) || inactiveSqueeze.isActive
+        || inactiveSqueeze.currentState != 0.0f)
+        return fail("inactive two-hand action did not return zero state");
 
     if (swapchain) api.get<PFN_xrDestroySwapchain>("xrDestroySwapchain")(swapchain);
     api.get<PFN_xrDestroySession>("xrDestroySession")(session);
     api.get<PFN_xrDestroyInstance>("xrDestroyInstance")(api.instance);
     api.instance = XR_NULL_HANDLE;
     FreeLibrary(api.runtime);
-    std::printf("PASS: %s (%s) exercised lifecycle and menu down/up action edges\n",
+    std::printf("PASS: %s (%s) exercised lifecycle, menu down/up edges and two-hand subactions\n",
                 graphics.name.c_str(), sizeof(void*) == 8 ? "x64" : "x86");
     return 0;
 }

@@ -9,6 +9,7 @@
 
 #include "xrsim_internal.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace xrsim {
@@ -22,6 +23,9 @@ XrPath g_profileTouch = XR_NULL_PATH;
 XrPath g_profileSimple = XR_NULL_PATH;
 bool g_useSimpleProfile = false;
 uint64_t g_lastSyncFrame = 0;
+// Bumped per xrSuggestInteractionProfileBindings call, so an action can tell
+// its first binding in a call from a later one.
+uint32_t g_suggestGen = 0;
 
 struct BindingEntry {
     const char* path;
@@ -308,13 +312,7 @@ void actions_reset_session() {
         if (s.used) s.attached = false;
     for (auto& a : g_actions) {
         if (!a.used) continue;
-        a.syncInitialized = false;
-        a.syncedActive = false;
-        a.syncedBool = false;
-        a.changedSinceLastSync = false;
-        a.syncedFloat = 0.0f;
-        a.syncedVector = {};
-        a.lastChangeTime = 0;
+        for (SimActionLane& lane : a.lane) lane = SimActionLane{};
     }
 }
 
@@ -379,6 +377,16 @@ static XrResult impl_CreateAction(XrActionSet setHandle, const XrActionCreateInf
         g_actions[i].setIndex = si;
         g_actions[i].type = info->actionType;
         strcpy_s(g_actions[i].name, info->actionName);
+        if (info->subactionPaths) {
+            uint32_t n = info->countSubactionPaths;
+            if (n > kMaxSubactionPaths) {
+                XRSIM_LOG("xrsim: action '%s' declares %u subaction paths; the first %u are kept",
+                          info->actionName, n, kMaxSubactionPaths);
+                n = kMaxSubactionPaths;
+            }
+            for (uint32_t k = 0; k < n; ++k) g_actions[i].subactionPaths[k] = info->subactionPaths[k];
+            g_actions[i].subactionCount = n;
+        }
         *out = make_typed_handle<XrAction>(HT_ACTION, i, gen);
         return XR_SUCCESS;
     }
@@ -420,6 +428,7 @@ static XrResult impl_SuggestInteractionProfileBindings(
     if (g_attached) return XR_ERROR_ACTIONSETS_ALREADY_ATTACHED;
 
     uint32_t bound = 0;
+    ++g_suggestGen;
     for (uint32_t i = 0; i < info->countSuggestedBindings; ++i) {
         const XrActionSuggestedBinding& b = info->suggestedBindings[i];
         const char* p = path_str(b.binding);
@@ -437,6 +446,35 @@ static XrResult impl_SuggestInteractionProfileBindings(
         if (pe->authoritative || a->control == VC_NONE) {
             a->control = e->control;
             a->hand = e->hand;
+        }
+
+        // Value reads keep EVERY driven binding of the winning profile, not just
+        // the last. Touch replaces whatever another profile left; any other
+        // profile only claims an action no profile has driven yet.
+        const bool driven = e->control != VC_NONE;
+        bool append = false;
+        if (pe->authoritative) {
+            if (a->suggestGen != g_suggestGen) {
+                a->bindingCount = 0;
+                a->bindingsAuthoritative = true;
+                a->suggestGen = g_suggestGen;
+            }
+            append = driven;
+        } else if (driven && !a->bindingsAuthoritative
+                   && (a->bindingCount == 0 || a->suggestGen == g_suggestGen)) {
+            a->suggestGen = g_suggestGen;
+            append = true;
+        }
+        for (uint32_t k = 0; append && k < a->bindingCount; ++k)
+            if (a->bindings[k].control == e->control && a->bindings[k].hand == e->hand)
+                append = false;   // the same binding suggested twice
+        if (append) {
+            if (a->bindingCount < kMaxActionBindings) {
+                a->bindings[a->bindingCount++] = SimBinding{e->control, e->hand};
+            } else {
+                XRSIM_LOG("xrsim: action '%s' exceeds %u bindings; '%s' is ignored", a->name,
+                          kMaxActionBindings, p ? p : "(null)");
+            }
         }
         if (e->control != VC_NONE) ++bound;
     }
@@ -529,40 +567,67 @@ static XrResult impl_SyncActions(XrSession session, const XrActionsSyncInfo* inf
         const Rig& rig = snap.rig;
         for (SimAction& action : g_actions) {
             if (!action.used) continue;
+            const bool setActive = activeSets[action.setIndex];
 
-            const bool wasInitialized = action.syncInitialized;
-            const bool wasActive = action.syncedActive;
-            const bool active = activeSets[action.setIndex] && action.control != VC_NONE
-                && (!control_is_pose(action.control)
-                    || rig.handValid[action.hand == 1 ? 1 : 0]);
-            bool valueChanged = false;
+            for (int laneIndex = 0; laneIndex < kLaneCount; ++laneIndex) {
+                SimActionLane& lane = action.lane[laneIndex];
 
-            if (action.type == XR_ACTION_TYPE_BOOLEAN_INPUT) {
-                const bool value = active && control_bool(rig, action.control);
-                valueChanged = wasInitialized && wasActive && active
-                    && value != action.syncedBool;
-                action.syncedBool = value;
-            } else if (action.type == XR_ACTION_TYPE_FLOAT_INPUT) {
-                const float value = active ? control_float(rig, action.control) : 0.0f;
-                valueChanged = wasInitialized && wasActive && active
-                    && value != action.syncedFloat;
-                action.syncedFloat = value;
-            } else if (action.type == XR_ACTION_TYPE_VECTOR2F_INPUT) {
-                XrVector2f value{};
-                if (active && (action.control == VC_STICK_L || action.control == VC_STICK_R)) {
-                    const int hand = action.control == VC_STICK_R ? 1 : 0;
-                    value.x = rig.stick[hand][0];
-                    value.y = rig.stick[hand][1];
+                // Aggregate the bindings that feed this lane, by the OpenXR rule for
+                // an action bound to several sources: booleans OR, floats take the
+                // largest magnitude, vectors the longest.
+                bool active = false;
+                bool boolValue = false;
+                float floatValue = 0.0f;
+                XrVector2f vectorValue{};
+                float vectorLength2 = -1.0f;
+                for (uint32_t b = 0; b < action.bindingCount; ++b) {
+                    const SimBinding& bind = action.bindings[b];
+                    if (laneIndex != kLaneAny && bind.hand != laneIndex) continue;
+                    const bool bindActive = setActive && bind.control != VC_NONE
+                        && (!control_is_pose(bind.control) || rig.handValid[bind.hand == 1 ? 1 : 0]);
+                    if (!bindActive) continue;
+                    active = true;
+                    if (action.type == XR_ACTION_TYPE_BOOLEAN_INPUT) {
+                        boolValue = boolValue || control_bool(rig, bind.control);
+                    } else if (action.type == XR_ACTION_TYPE_FLOAT_INPUT) {
+                        const float v = control_float(rig, bind.control);
+                        if (std::fabs(v) > std::fabs(floatValue)) floatValue = v;
+                    } else if (action.type == XR_ACTION_TYPE_VECTOR2F_INPUT
+                               && (bind.control == VC_STICK_L || bind.control == VC_STICK_R)) {
+                        const int stick = bind.control == VC_STICK_R ? 1 : 0;
+                        const XrVector2f v{rig.stick[stick][0], rig.stick[stick][1]};
+                        const float length2 = v.x * v.x + v.y * v.y;
+                        if (length2 > vectorLength2) {
+                            vectorLength2 = length2;
+                            vectorValue = v;
+                        }
+                    }
                 }
-                valueChanged = wasInitialized && wasActive && active
-                    && (value.x != action.syncedVector.x || value.y != action.syncedVector.y);
-                action.syncedVector = value;
-            }
 
-            action.changedSinceLastSync = valueChanged;
-            action.syncedActive = active;
-            action.syncInitialized = true;
-            if (valueChanged) action.lastChangeTime = snap.displayTime;
+                // From here on, exactly the single-binding edge logic, per lane.
+                const bool wasInitialized = lane.syncInitialized;
+                const bool wasActive = lane.syncedActive;
+                bool valueChanged = false;
+                if (action.type == XR_ACTION_TYPE_BOOLEAN_INPUT) {
+                    const bool value = active && boolValue;
+                    valueChanged = wasInitialized && wasActive && active && value != lane.syncedBool;
+                    lane.syncedBool = value;
+                } else if (action.type == XR_ACTION_TYPE_FLOAT_INPUT) {
+                    const float value = active ? floatValue : 0.0f;
+                    valueChanged = wasInitialized && wasActive && active && value != lane.syncedFloat;
+                    lane.syncedFloat = value;
+                } else if (action.type == XR_ACTION_TYPE_VECTOR2F_INPUT) {
+                    const XrVector2f value = active ? vectorValue : XrVector2f{};
+                    valueChanged = wasInitialized && wasActive && active
+                        && (value.x != lane.syncedVector.x || value.y != lane.syncedVector.y);
+                    lane.syncedVector = value;
+                }
+
+                lane.changedSinceLastSync = valueChanged;
+                lane.syncedActive = active;
+                lane.syncInitialized = true;
+                if (valueChanged) lane.lastChangeTime = snap.displayTime;
+            }
         }
     }
     return XR_SUCCESS;
@@ -570,15 +635,43 @@ static XrResult impl_SyncActions(XrSession session, const XrActionsSyncInfo* inf
 
 namespace {
 
-// Common preamble for the four state getters.
-XrResult resolve(XrSession session, const XrActionStateGetInfo* info, SimAction** out) {
+// Common preamble for the four state getters. It also maps the subaction path to
+// a lane: NULL reads the combined state, a declared hand reads that hand, and a
+// path the action never declared is an error on every conformant runtime.
+XrResult resolve(XrSession session, const XrActionStateGetInfo* info, SimAction** out, int* lane) {
     if (!session_valid(session)) return XR_ERROR_HANDLE_INVALID;
     if (!info) return XR_ERROR_VALIDATION_FAILURE;
     if (!actions_attached()) return XR_ERROR_ACTIONSET_NOT_ATTACHED;
     SimAction* a = action_get(info->action);
     if (!a) return XR_ERROR_HANDLE_INVALID;
+    *lane = kLaneAny;
+    if (info->subactionPath != XR_NULL_PATH) {
+        bool declared = false;
+        for (uint32_t i = 0; i < a->subactionCount && !declared; ++i)
+            declared = a->subactionPaths[i] == info->subactionPath;
+        const char* p = path_str(info->subactionPath);
+        if (!declared) {
+            if (!a->warnedUndeclaredSubaction) {
+                a->warnedUndeclaredSubaction = true;
+                XRSIM_LOG("xrsim: action '%s' read with subaction path '%s' it never declared - REJECTED",
+                          a->name, p ? p : "(null)");
+            }
+            return XR_ERROR_PATH_UNSUPPORTED;
+        }
+        if (p && strcmp(p, "/user/hand/left") == 0) *lane = kLaneLeft;
+        else if (p && strcmp(p, "/user/hand/right") == 0) *lane = kLaneRight;
+        else *lane = -1;   // declared but not modelled, e.g. /user/gamepad: no input
+    }
     *out = a;
     return XR_SUCCESS;
+}
+
+// A pose action reports active only through a pose binding on the lane it reads.
+bool lane_has_pose(const SimAction& a, int lane) {
+    for (uint32_t b = 0; b < a.bindingCount; ++b)
+        if ((lane == kLaneAny || a.bindings[b].hand == lane) && control_is_pose(a.bindings[b].control))
+            return true;
+    return false;
 }
 
 bool inputs_live() { return current_session_state() == XR_SESSION_STATE_FOCUSED; }
@@ -588,65 +681,73 @@ bool inputs_live() { return current_session_state() == XR_SESSION_STATE_FOCUSED;
 static XrResult impl_GetActionStateBoolean(XrSession session, const XrActionStateGetInfo* info,
                                            XrActionStateBoolean* state) noexcept {
     SimAction* a = nullptr;
-    const XrResult r = resolve(session, info, &a);
+    int lane = kLaneAny;
+    const XrResult r = resolve(session, info, &a, &lane);
     if (XR_FAILED(r)) return r;
     if (!state) return XR_ERROR_VALIDATION_FAILURE;
     if (a->type != XR_ACTION_TYPE_BOOLEAN_INPUT) return XR_ERROR_ACTION_TYPE_MISMATCH;
 
-    const bool live = inputs_live() && a->syncedActive;
+    const SimActionLane* L = lane >= 0 ? &a->lane[lane] : nullptr;
+    const bool live = inputs_live() && L && L->syncedActive;
     state->type = XR_TYPE_ACTION_STATE_BOOLEAN;
     state->isActive = live ? XR_TRUE : XR_FALSE;
-    state->currentState = live && a->syncedBool ? XR_TRUE : XR_FALSE;
-    state->changedSinceLastSync = live && a->changedSinceLastSync ? XR_TRUE : XR_FALSE;
-    state->lastChangeTime = live ? a->lastChangeTime : 0;
+    state->currentState = live && L->syncedBool ? XR_TRUE : XR_FALSE;
+    state->changedSinceLastSync = live && L->changedSinceLastSync ? XR_TRUE : XR_FALSE;
+    state->lastChangeTime = live ? L->lastChangeTime : 0;
     return XR_SUCCESS;
 }
 
 static XrResult impl_GetActionStateFloat(XrSession session, const XrActionStateGetInfo* info,
                                          XrActionStateFloat* state) noexcept {
     SimAction* a = nullptr;
-    const XrResult r = resolve(session, info, &a);
+    int lane = kLaneAny;
+    const XrResult r = resolve(session, info, &a, &lane);
     if (XR_FAILED(r)) return r;
     if (!state) return XR_ERROR_VALIDATION_FAILURE;
     if (a->type != XR_ACTION_TYPE_FLOAT_INPUT) return XR_ERROR_ACTION_TYPE_MISMATCH;
 
-    const bool live = inputs_live() && a->syncedActive;
+    const SimActionLane* L = lane >= 0 ? &a->lane[lane] : nullptr;
+    const bool live = inputs_live() && L && L->syncedActive;
     state->type = XR_TYPE_ACTION_STATE_FLOAT;
     state->isActive = live ? XR_TRUE : XR_FALSE;
-    state->currentState = live ? a->syncedFloat : 0.0f;
-    state->changedSinceLastSync = live && a->changedSinceLastSync ? XR_TRUE : XR_FALSE;
-    state->lastChangeTime = live ? a->lastChangeTime : 0;
+    state->currentState = live ? L->syncedFloat : 0.0f;
+    state->changedSinceLastSync = live && L->changedSinceLastSync ? XR_TRUE : XR_FALSE;
+    state->lastChangeTime = live ? L->lastChangeTime : 0;
     return XR_SUCCESS;
 }
 
 static XrResult impl_GetActionStateVector2f(XrSession session, const XrActionStateGetInfo* info,
                                             XrActionStateVector2f* state) noexcept {
     SimAction* a = nullptr;
-    const XrResult r = resolve(session, info, &a);
+    int lane = kLaneAny;
+    const XrResult r = resolve(session, info, &a, &lane);
     if (XR_FAILED(r)) return r;
     if (!state) return XR_ERROR_VALIDATION_FAILURE;
     if (a->type != XR_ACTION_TYPE_VECTOR2F_INPUT) return XR_ERROR_ACTION_TYPE_MISMATCH;
 
-    const bool live = inputs_live() && a->syncedActive;
+    const SimActionLane* L = lane >= 0 ? &a->lane[lane] : nullptr;
+    const bool live = inputs_live() && L && L->syncedActive;
     state->type = XR_TYPE_ACTION_STATE_VECTOR2F;
     state->isActive = live ? XR_TRUE : XR_FALSE;
     // Raw, pre-deadzone. The mod applies its own radial deadzone and would
     // double-apply if the runtime helped.
-    state->currentState = live ? a->syncedVector : XrVector2f{};
-    state->changedSinceLastSync = live && a->changedSinceLastSync ? XR_TRUE : XR_FALSE;
-    state->lastChangeTime = live ? a->lastChangeTime : 0;
+    state->currentState = live ? L->syncedVector : XrVector2f{};
+    state->changedSinceLastSync = live && L->changedSinceLastSync ? XR_TRUE : XR_FALSE;
+    state->lastChangeTime = live ? L->lastChangeTime : 0;
     return XR_SUCCESS;
 }
 
 static XrResult impl_GetActionStatePose(XrSession session, const XrActionStateGetInfo* info,
                                         XrActionStatePose* state) noexcept {
     SimAction* a = nullptr;
-    const XrResult r = resolve(session, info, &a);
+    int lane = kLaneAny;
+    const XrResult r = resolve(session, info, &a, &lane);
     if (XR_FAILED(r)) return r;
     if (!state) return XR_ERROR_VALIDATION_FAILURE;
     if (a->type != XR_ACTION_TYPE_POSE_INPUT) return XR_ERROR_ACTION_TYPE_MISMATCH;
 
-    const bool live = inputs_live() && a->syncedActive && control_is_pose(a->control);
+    const SimActionLane* L = lane >= 0 ? &a->lane[lane] : nullptr;
+    const bool live = inputs_live() && L && L->syncedActive && lane_has_pose(*a, lane);
     state->type = XR_TYPE_ACTION_STATE_POSE;
     state->isActive = live ? XR_TRUE : XR_FALSE;
     return XR_SUCCESS;

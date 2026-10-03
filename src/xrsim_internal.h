@@ -62,17 +62,16 @@ struct SimActionSet {
     bool attached = false;
 };
 
-struct SimAction {
-    bool used = false;
-    uint32_t gen = 0;
-    uint32_t setIndex = 0;
-    XrActionType type = XR_ACTION_TYPE_BOOLEAN_INPUT;
-    char name[XR_MAX_ACTION_NAME_SIZE] = {};
-    VirtualControl control = VC_NONE;  // resolved at suggest-binding time
+// One driven input an action is bound to.
+struct SimBinding {
+    VirtualControl control = VC_NONE;
     int hand = -1;
-    // Input state is sampled by xrSyncActions and remains stable until the
-    // next sync. OpenXR explicitly forbids getters from observing live input
-    // changes between synchronization calls.
+};
+
+// The synchronized state xrGetActionState* reports. Input is sampled by
+// xrSyncActions and stays stable until the next sync - OpenXR forbids getters
+// from observing live changes between syncs. Each lane keeps its own edges.
+struct SimActionLane {
     bool syncInitialized = false;
     bool syncedActive = false;
     bool syncedBool = false;
@@ -80,6 +79,36 @@ struct SimAction {
     float syncedFloat = 0.0f;
     XrVector2f syncedVector{};
     XrTime lastChangeTime = 0;
+};
+
+// What a getter can read: one lane per modelled hand, plus the combined state a
+// NULL subactionPath returns.
+enum SimLane : int { kLaneLeft = 0, kLaneRight = 1, kLaneAny = 2, kLaneCount = 3 };
+constexpr uint32_t kMaxActionBindings = 8;
+constexpr uint32_t kMaxSubactionPaths = 16;
+
+struct SimAction {
+    bool used = false;
+    uint32_t gen = 0;
+    uint32_t setIndex = 0;
+    XrActionType type = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    char name[XR_MAX_ACTION_NAME_SIZE] = {};
+    // The resolved control for POSE spaces, which take their hand from this
+    // unless a subaction path overrides it. Same rule as before multi-binding.
+    VirtualControl control = VC_NONE;
+    int hand = -1;
+    // Every driven binding, so a value read can reach each hand. The same
+    // "squeeze" suggested on both hands is two bindings, not one.
+    SimBinding bindings[kMaxActionBindings]{};
+    uint32_t bindingCount = 0;
+    bool bindingsAuthoritative = false;
+    uint32_t suggestGen = 0;
+    // The subaction paths the action was created with. A getter may only ask
+    // for one of these.
+    XrPath subactionPaths[kMaxSubactionPaths]{};
+    uint32_t subactionCount = 0;
+    bool warnedUndeclaredSubaction = false;
+    SimActionLane lane[kLaneCount]{};
 };
 
 // ---------------------------------------------------------------------------
